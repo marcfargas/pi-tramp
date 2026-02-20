@@ -206,13 +206,13 @@ export class TargetManager extends EventEmitter {
 
   // --- Typed event emitter helpers ---
 
-  override on(event: "target_switched", listener: (e: TargetManagerEvents["target_switched"]) => void): this;
-  override on(event: string, listener: (...args: unknown[]) => void): this {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
 
-  override emit(event: "target_switched", payload: TargetManagerEvents["target_switched"]): boolean;
-  override emit(event: string, ...args: unknown[]): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  override emit(event: string, ...args: any[]): boolean {
     return super.emit(event, ...args);
   }
 }

@@ -15,7 +15,9 @@ describe("TargetConfigSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.type).toBe("ssh");
-      expect(result.data.port).toBe(22); // default
+      if (result.data.type === "ssh") {
+        expect(result.data.port).toBe(22); // default
+      }
       expect(result.data.timeout).toBe(60000); // default
       expect(result.data.requireEntryConfirmation).toBe(false); // default
     }
@@ -96,7 +98,7 @@ describe("TargetConfigSchema", () => {
       port: 2222,
     });
     expect(result.success).toBe(true);
-    if (result.success) {
+    if (result.success && result.data.type === "ssh") {
       expect(result.data.port).toBe(2222);
     }
   });
