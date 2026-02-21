@@ -73,7 +73,7 @@
 - **No shell detection adversarial scenarios**: noisy stdout/stderr, prompt contamination, echoed input, marker collisions.
 - **No large-file boundary test** near/above 10MB limit in remote operations.
 - **No cross-target concurrency test** (simultaneous operations on multiple targets while switching targets).
-- **No Docker auto-detect validation on Windows** (all Docker scenarios in e2e force shell explicitly, `test/e2e.integration.test.ts:103-109`).
+- **No Docker shell-selection validation on Windows** (all Docker scenarios in e2e force shell explicitly, `test/e2e.integration.test.ts:103-109`).
 - **No SSH shell mismatch test** despite e2e header claiming it (`test/e2e.integration.test.ts:12` comment, but no actual case).
 - **No cmd-shell transport integration** although `cmd` is part of accepted schema (`src/types.ts:132`).
 
@@ -137,7 +137,7 @@ Patterns that can fool detector right now:
    - `SshTransport` resolves with `stderr: ""` (`src/transport/ssh-transport.ts:295`) and tests never assert stderr semantics.
    - High impact: tool behavior/error reporting is wrong.
 
-2. **False pwsh auto-detection on noisy/echoing shells**
+2. **False pwsh shell-selection on noisy/echoing shells**
    - `includes(marker)` probe (`src/transport/ssh-transport.ts:314`) can be spoofed by echoed input/noise.
    - High impact: wrong driver/sentinel logic selected.
 
@@ -192,7 +192,7 @@ Patterns that can fool detector right now:
    - `SshTransport` resolves with `stderr: ""` (`src/transport/ssh-transport.ts:295`) and tests never assert stderr semantics.
    - High impact: tool behavior/error reporting is wrong.
 
-2. **False pwsh auto-detection on noisy/echoing shells**
+2. **False pwsh shell-selection on noisy/echoing shells**
    - `includes(marker)` probe (`src/transport/ssh-transport.ts:314`) can be spoofed by echoed input/noise.
    - High impact: wrong driver/sentinel logic selected.
 

@@ -203,7 +203,7 @@ function handleAdd(
   if (!name || !configJson) {
     return textResult(
       "Usage: target add <name> --config '{\"type\":\"ssh\",\"host\":\"user@host\",\"shell\":\"bash\"}'\n" +
-      "SSH requires: host, shell (\"bash\" or \"pwsh\"). cwd is optional — auto-detected from remote home directory on connect.",
+      "SSH requires: host, shell (\"bash\" or \"pwsh\"). cwd is optional — resolved from the remote home directory on connect.",
     );
   }
 

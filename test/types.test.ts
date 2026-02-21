@@ -53,7 +53,7 @@ describe("TargetConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts missing cwd (auto-detected on connect)", () => {
+  it("accepts missing cwd (defaults to remote homedir on connect)", () => {
     const result = TargetConfigSchema.safeParse({
       type: "ssh",
       host: "user@host",

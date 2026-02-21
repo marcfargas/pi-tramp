@@ -84,7 +84,7 @@ Project config overrides global by target name. The `default` target auto-connec
 - **Keys only** — no password auth (SSH agent or `identityFile`)
 - **Persistent connection** — single SSH process, sentinel protocol for command demarcation
 - **`shell` is required** — set `"shell": "bash"` for Linux/macOS targets, `"shell": "pwsh"` for Windows/PowerShell targets
-- **`cwd` is optional** — if omitted, auto-detected from remote home directory
+- **`cwd` is optional** — if omitted, it resolves to the remote home directory on connect
 - Uses Windows SSH (`C:\Windows\System32\OpenSSH\ssh.exe`) on Windows for agent access
 
 #### pwsh targets (Windows servers, PowerShell hosts)
@@ -110,7 +110,7 @@ Set `"shell": "pwsh"` for any target running Windows PowerShell or PowerShell 7+
 ```
 
 - **One-shot** — each command is a separate `docker exec`
-- **Shell detection** — probes for pwsh → login shell → echo $0 → falls back to sh
+- **Shell selection** — uses configured `shell` when provided; otherwise resolves container shell on connect
 - **`cwd` is optional** — defaults to container's home directory
 
 ## Usage

@@ -216,7 +216,7 @@ export class SshTransport extends EventEmitter implements Transport {
     if (this.ssh) {
       try {
         // Remove all listeners first to prevent onSshDeath firing
-        // during intentional reconnects (e.g., shell auto-detection).
+        // during intentional reconnect flows.
         this.ssh.removeAllListeners();
         this.ssh.stdout?.removeAllListeners();
         this.ssh.stderr?.removeAllListeners();

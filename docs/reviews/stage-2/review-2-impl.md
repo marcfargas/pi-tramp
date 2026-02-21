@@ -115,11 +115,11 @@ Move-Item "$env:TEMP\.pitramp_tmp_${UUID}" "C:\target\path\file.txt" -Force
 {
   "targets": {
     "dev": {
-      "type": "ssh",
+      "type": "ssh",                           // shell required
       "host": "marc@dev.server.internal",
       "identityFile": "~/.ssh/dev_ed25519",   // Phase 1 only field
       "cwd": "/home/marc/project",
-      "shell": "bash",                          // optional override
+      "shell": "bash",
       "requireEntryConfirmation": false,
       "timeout": 30000                          // ms, default 60000
     },
@@ -130,9 +130,10 @@ Move-Item "$env:TEMP\.pitramp_tmp_${UUID}" "C:\target\path\file.txt" -Force
       // No requireEntryConfirmation → defaults to false
     },
     "production": {
-      "type": "ssh",
+      "type": "ssh",                           // shell required
       "host": "deploy@prod.example.com",
       "cwd": "/srv/app",
+      "shell": "bash",
       "requireEntryConfirmation": true
       // No identityFile → uses ssh-agent / default key
     }

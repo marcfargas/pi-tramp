@@ -1,7 +1,7 @@
 /**
- * Shell detection — probes a target to determine shell, platform, and arch.
+ * Shell/platform parsing helpers for transport command output.
  *
- * See specs/shell-detection.md for the full algorithm.
+ * See specs/shell-detection.md for parsing rules and command context.
  */
 
 import type { ShellType, PlatformType } from "../types.js";
