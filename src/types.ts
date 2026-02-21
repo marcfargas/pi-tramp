@@ -136,8 +136,8 @@ const SshTargetConfigSchema = z.object({
   host: z.string().min(1, "SSH host is required (user@hostname)"),
   port: z.number().int().min(1).max(65535).optional().default(22),
   identityFile: z.string().optional(),
-  cwd: z.string().min(1).optional(), // Optional — auto-detected from remote homedir on connect
-  shell: ShellTypeSchema.optional(),
+  cwd: z.string().min(1).optional(), // Optional — defaults to remote homedir on connect
+  shell: ShellTypeSchema,
   requireEntryConfirmation: z.boolean().optional().default(false),
   timeout: z.number().int().min(1000, "Timeout must be at least 1000ms").optional().default(60000),
 });
@@ -145,7 +145,7 @@ const SshTargetConfigSchema = z.object({
 const DockerTargetConfigSchema = z.object({
   type: z.literal("docker"),
   container: z.string().min(1, "Docker container name is required"),
-  cwd: z.string().min(1).optional(), // Optional — auto-detected from remote homedir on connect
+  cwd: z.string().min(1).optional(), // Optional — defaults to remote homedir on connect
   shell: ShellTypeSchema.optional(),
   requireEntryConfirmation: z.boolean().optional().default(false),
   timeout: z.number().int().min(1000).optional().default(30000),
@@ -154,7 +154,7 @@ const DockerTargetConfigSchema = z.object({
 const WslTargetConfigSchema = z.object({
   type: z.literal("wsl"),
   distro: z.string().min(1, "WSL distro name is required"),
-  cwd: z.string().min(1).optional(), // Optional — auto-detected from remote homedir on connect
+  cwd: z.string().min(1).optional(), // Optional — defaults to remote homedir on connect
   shell: ShellTypeSchema.optional(),
   requireEntryConfirmation: z.boolean().optional().default(false),
   timeout: z.number().int().min(1000).optional().default(30000),
@@ -165,7 +165,7 @@ const PsRemoteTargetConfigSchema = z.object({
   computerName: z.string().min(1, "Computer name is required"),
   credential: z.string().optional(),
   authentication: z.enum(["Default", "Kerberos", "Negotiate", "Basic"]).optional(),
-  cwd: z.string().min(1).optional(), // Optional — auto-detected from remote homedir on connect
+  cwd: z.string().min(1).optional(), // Optional — defaults to remote homedir on connect
   shell: ShellTypeSchema.optional(),
   requireEntryConfirmation: z.boolean().optional().default(false),
   timeout: z.number().int().min(1000).optional().default(60000),

@@ -31,7 +31,7 @@ const SshTargetConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).optional().default(22),
   identityFile: z.string().optional(),
   cwd: z.string().min(1, "Working directory (cwd) is required"),
-  shell: ShellTypeSchema.optional(),
+  shell: ShellTypeSchema,
   requireEntryConfirmation: z.boolean().optional().default(false),
   timeout: z.number().int().min(1000, "Timeout must be at least 1000ms").optional().default(60000),
 });
@@ -161,8 +161,8 @@ function mergeConfigs(global: TargetsFile | null, project: TargetsFile | null): 
 {
   "default": "dev",
   "targets": {
-    "dev": { "type": "ssh", "host": "marc@dev.server", "cwd": "/home/marc" },
-    "staging": { "type": "ssh", "host": "deploy@staging", "cwd": "/app" }
+    "dev": { "type": "ssh", "host": "marc@dev.server", "cwd": "/home/marc", "shell": "bash" },
+    "staging": { "type": "ssh", "host": "deploy@staging", "cwd": "/app", "shell": "bash" }
   }
 }
 ```
@@ -184,7 +184,7 @@ function mergeConfigs(global: TargetsFile | null, project: TargetsFile | null): 
   "default": "project-dev",
   "targets": {
     "dev": { "type": "docker", "container": "myapp-dev", "cwd": "/workspace" },
-    "staging": { "type": "ssh", "host": "deploy@staging", "cwd": "/app" },
+    "staging": { "type": "ssh", "host": "deploy@staging", "cwd": "/app", "shell": "bash" },
     "project-dev": { "type": "docker", "container": "myapp-local", "cwd": "/workspace" }
   }
 }
@@ -201,7 +201,7 @@ Note: `dev` from project (Docker) completely replaced `dev` from global (SSH).
   "default": "dev",
   "targets": {
     "dev": {
-      "type": "ssh",
+      "type": "ssh", "shell": "bash",
       "host": "marc@dev.example.com",
       "port": 22,
       "identityFile": "~/.ssh/id_ed25519",
@@ -233,7 +233,7 @@ Note: `dev` from project (Docker) completely replaced `dev` from global (SSH).
 {
   "targets": {
     "production": {
-      "type": "ssh",
+      "type": "ssh", "shell": "bash",
       "host": "deploy@prod.example.com",
       "cwd": "/app",
       "requireEntryConfirmation": true,
@@ -250,7 +250,7 @@ Note: `dev` from project (Docker) completely replaced `dev` from global (SSH).
   "default": "dev",
   "targets": {
     "dev": {
-      "type": "ssh",
+      "type": "ssh", "shell": "bash",
       "host": "marc@dev.server",
       "cwd": "/home/marc/project"
     },
@@ -260,13 +260,12 @@ Note: `dev` from project (Docker) completely replaced `dev` from global (SSH).
       "cwd": "/workspace"
     },
     "win-server": {
-      "type": "ssh",
+      "type": "ssh", "shell": "pwsh",
       "host": "admin@win.internal",
-      "cwd": "C:\\Projects\\app",
-      "shell": "pwsh"
+      "cwd": "C:\\Projects\\app"
     },
     "production": {
-      "type": "ssh",
+      "type": "ssh", "shell": "bash",
       "host": "deploy@prod.example.com",
       "cwd": "/app",
       "requireEntryConfirmation": true

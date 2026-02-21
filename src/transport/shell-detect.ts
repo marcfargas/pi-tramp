@@ -1,7 +1,7 @@
 /**
- * Shell detection — probes a target to determine shell, platform, and arch.
+ * Shell/platform parsing helpers for transport command output.
  *
- * See specs/shell-detection.md for the full algorithm.
+ * See specs/shell-detection.md for parsing rules and command context.
  */
 
 import type { ShellType, PlatformType } from "../types.js";
@@ -71,32 +71,6 @@ export function parseArch(output: string): string {
   if (cleaned.length > 64) return "unknown"; // Reject absurdly long values
   if (cleaned === "arm64") return "aarch64"; // normalize macOS arm64
   return cleaned || "unknown";
-}
-
-/**
- * Parse the output of the cmd/PowerShell polyglot command.
- * Source: https://stackoverflow.com/a/61469226 (CC BY-SA 4.0)
- * Polyglot: (dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition
- * Returns: "cmd" | "pwsh" | "unknown"
- */
-export function parseShellPolyglot(output: string): ShellType {
-  const cleaned = stripAnsi(output).trim();
-  const lines = cleaned.split(/\r?\n/).map((l) => l.trim());
-
-  // First pass: exact line match for PowerShell edition tokens.
-  // These must be checked before CMD because a noisy session may echo the
-  // polyglot command (which contains the literal string 'CMD') followed by
-  // the real output ('Core' or 'Desktop') on a separate line.
-  for (const line of lines) {
-    if (line === "Core" || line === "Desktop") return "pwsh";
-  }
-
-  // Second pass: exact line match for CMD.
-  for (const line of lines) {
-    if (line === "CMD") return "cmd";
-  }
-
-  return "unknown";
 }
 
 /**

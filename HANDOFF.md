@@ -57,8 +57,8 @@ Windows container SSH tests may still need iteration (ssh-keygen passphrase quot
 
 - **Windows SSH binary**: Always use `C:\Windows\System32\OpenSSH\ssh.exe` for agent access
 - **pwsh over SSH**: bash is the outer shell (sentinel protocol). pwsh commands wrapped in `pwsh -NoProfile -NonInteractive -Command '...'`
-- **Shell auto-detection**: Marker-based probe (`PITRAMP_PWSH_<uuid>`), not version parsing
-- **Reconnect on pwsh detect**: Kill SSH and respawn with clean flags after auto-detecting pwsh login shell
-- **cwd optional**: Auto-detected from remote home directory on connect
+- **SSH shell configuration**: `shell` is required for SSH targets (`bash` or `pwsh`)
+- **pwsh over SSH**: Launches directly with clean flags (`pwsh -NoProfile -NonInteractive -Command -`)
+- **cwd optional**: Defaults to remote home directory on connect
 - **CRLF**: Handled by pi's `createEditTool` transparently — no pi-tramp code needed
 - **Exit codes in tests**: Docker pwsh uses `exit N` (ephemeral). SSH pwsh spawns child `pwsh -c 'exit N'` (persistent session)

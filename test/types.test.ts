@@ -11,6 +11,7 @@ describe("TargetConfigSchema", () => {
       type: "ssh",
       host: "marc@dev.server",
       cwd: "/home/marc",
+      shell: "bash",
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -52,10 +53,11 @@ describe("TargetConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts missing cwd (auto-detected on connect)", () => {
+  it("accepts missing cwd (defaults to remote homedir on connect)", () => {
     const result = TargetConfigSchema.safeParse({
       type: "ssh",
       host: "user@host",
+      shell: "bash",
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -72,7 +74,7 @@ describe("TargetConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("validates optional shell override", () => {
+  it("validates shell field", () => {
     const result = TargetConfigSchema.safeParse({
       type: "ssh",
       host: "user@host",
@@ -80,6 +82,14 @@ describe("TargetConfigSchema", () => {
       shell: "pwsh",
     });
     expect(result.success).toBe(true);
+  });
+
+  it("rejects SSH target without shell", () => {
+    const result = TargetConfigSchema.safeParse({
+      type: "ssh",
+      host: "user@host",
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects invalid shell", () => {
@@ -117,6 +127,7 @@ describe("TargetConfigSchema", () => {
       host: "user@host",
       cwd: "/home",
       port: 2222,
+      shell: "bash",
     });
     expect(result.success).toBe(true);
     if (result.success && result.data.type === "ssh") {
@@ -130,7 +141,7 @@ describe("TargetsFileSchema", () => {
     const result = TargetsFileSchema.safeParse({
       default: "dev",
       targets: {
-        dev: { type: "ssh", host: "marc@dev", cwd: "/home/marc" },
+        dev: { type: "ssh", host: "marc@dev", cwd: "/home/marc", shell: "bash" },
         odoo: { type: "docker", container: "odoo-dev", cwd: "/workspace" },
       },
     });
@@ -147,7 +158,7 @@ describe("TargetsFileSchema", () => {
   it("rejects 'local' as target name", () => {
     const result = TargetsFileSchema.safeParse({
       targets: {
-        local: { type: "ssh", host: "user@host", cwd: "/home" },
+        local: { type: "ssh", host: "user@host", cwd: "/home", shell: "bash" },
       },
     });
     expect(result.success).toBe(false);
@@ -157,7 +168,7 @@ describe("TargetsFileSchema", () => {
     const result = TargetsFileSchema.safeParse({
       default: "nonexistent",
       targets: {
-        dev: { type: "ssh", host: "user@host", cwd: "/home" },
+        dev: { type: "ssh", host: "user@host", cwd: "/home", shell: "bash" },
       },
     });
     expect(result.success).toBe(false);
@@ -174,7 +185,7 @@ describe("TargetsFileSchema", () => {
   it("rejects invalid target name characters", () => {
     const result = TargetsFileSchema.safeParse({
       targets: {
-        "my target": { type: "ssh", host: "user@host", cwd: "/home" },
+        "my target": { type: "ssh", host: "user@host", cwd: "/home", shell: "bash" },
       },
     });
     expect(result.success).toBe(false);

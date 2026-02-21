@@ -53,6 +53,7 @@ describe.skipIf(isWindows)("SshTransport", () => {
       port: 2222,
       identityFile: KEY_PATH,
       cwd: "/workspace",
+      shell: "bash",
     } as SshTargetConfig);
 
     await transport.connect();

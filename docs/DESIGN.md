@@ -37,9 +37,10 @@ A named execution environment. Defined in config or created dynamically at runti
 {
   "targets": {
     "dev": {
-      "type": "ssh",
+      "type": "ssh", // shell: bash
       "host": "marc@dev.server",
-      "cwd": "/home/marc/project"
+      "cwd": "/home/marc/project",
+      "shell": "bash"
     },
     "odoo-container": {
       "type": "docker",
@@ -47,13 +48,15 @@ A named execution environment. Defined in config or created dynamically at runti
       "cwd": "/workspace"
     },
     "win-server": {
-      "type": "ssh",
+      "type": "ssh", // shell: pwsh
       "host": "admin@win.internal",
-      "cwd": "C:\\Projects\\app"
+      "cwd": "C:\\Projects\\app",
+      "shell": "pwsh"
     },
     "production": {
-      "type": "ssh",
+      "type": "ssh", // shell: bash
       "host": "deploy@prod.example.com",
+      "shell": "bash",
       "requireEntryConfirmation": true
     }
   },
@@ -61,20 +64,19 @@ A named execution environment. Defined in config or created dynamically at runti
 }
 ```
 
-Minimal config: just `type` + connection details + `cwd`. Everything else is discovered.
+Minimal SSH config: `type` + connection details + `shell` (plus optional `cwd`).
+Docker/WSL/PSRemote may still resolve shell defaults at connect time.
 
 ### What Gets Discovered on Connection
 
-On first connect to a target, pi-tramp probes the environment:
+On first connect to a target, pi-tramp resolves runtime metadata:
 
-- **Platform**: `uname -s` (Linux, Darwin) or OS detection via the shell we land in
+- **Platform**: `uname -s` (Linux, Darwin) or platform-specific equivalent
 - **Architecture**: `uname -m` or equivalent
-- **Shell**: whatever the connection drops us into — we detect it, we don't probe for others
-- **Available tools**: selective probing (`git --version`, `node --version`, etc.) — optional
+- **Available tools**: selective checks (`git --version`, `node --version`, etc.) — optional
 
-If the user wants a different shell than what the connection gives, they set it in
-`targets.json`. We don't guess. If we drop into a restricted shell or `cmd.exe`, we
-complain and work with what we have — that's the user's problem.
+For SSH targets, shell is explicit in config and required (`"bash"` or `"pwsh"`).
+No shell probe/reconnect flow is used.
 
 ### Transport Backends
 
@@ -106,9 +108,9 @@ system prompt tells the agent:
 - If pi-powershell is loaded, load its skill for PowerShell idioms
 - The agent adapts its commands, not the tool
 
-The user might still need bash on a Windows target (Git Bash, WSL bash). If they
-want to force a specific shell, they set `"shell": "bash"` in the target config.
-But by default, we use whatever we're given.
+The user chooses the SSH shell explicitly in config (`"shell": "bash"` for Linux/macOS,
+`"shell": "pwsh"` for Windows/PowerShell hosts). pi-tramp does not attempt shell
+probing or fallback for SSH sessions.
 
 ## Architecture
 
@@ -302,9 +304,9 @@ SSH agent configuration on the Windows-WSL boundary) — not Phase 1.
 interface SshConnection {
   process: ChildProcess;      // persistent ssh process
   host: string;
-  shell: string;              // detected on connect
-  platform: string;           // detected on connect
-  arch: string;               // detected on connect
+  shell: string;              // required in config
+  platform: string;           // resolved on connect
+  arch: string;               // resolved on connect
 
   exec(command: string): Promise<{ stdout: string; stderr: string; code: number }>;
   readFile(path: string): Promise<Buffer>;
@@ -312,14 +314,14 @@ interface SshConnection {
 }
 ```
 
-File operations use the detected shell:
+File operations use the configured shell:
 - bash: `cat`, `base64`, `mkdir -p`
 - pwsh: `Get-Content`, `Set-Content`, `New-Item`
 
 ### Connection Lifecycle
 
 1. `target switch "dev"` → open SSH connection
-2. Detect shell, platform, arch on first command
+2. Use configured shell and resolve platform/arch/homedir
 3. Keep alive with periodic no-op commands
 4. On connection drop → notify agent, attempt reconnect
 5. On `target switch` away → keep connection alive (don't close, might switch back)
@@ -353,7 +355,7 @@ Project config takes precedence on name collisions.
 {
   "targets": {
     "<name>": {
-      "type": "ssh" | "docker" | "wsl" | "psremote",
+      "type": "ssh" | "docker" | "wsl" | "psremote", // shell required when type="ssh"
       // Connection (type-specific):
       "host": "user@hostname",           // ssh
       "container": "container-name",     // docker
@@ -364,7 +366,7 @@ Project config takes precedence on name collisions.
 
       // Common:
       "cwd": "/path/to/workspace",
-      "shell": "pwsh",                   // override detected shell (optional)
+      "shell": "pwsh",                   // required for SSH targets; optional for other transports
       "requireEntryConfirmation": true,   // require user confirm before switch (optional)
     }
   },
@@ -372,8 +374,8 @@ Project config takes precedence on name collisions.
 }
 ```
 
-Platform, arch, and shell are discovered on connection — not configured
-(unless the user wants to force a shell).
+Platform and arch are resolved on connection. For SSH, shell is configured
+explicitly and required.
 
 ## Phasing
 
@@ -385,7 +387,7 @@ Platform, arch, and shell are discovered on connection — not configured
 - System prompt augmentation with platform/shell info
 - Context injection on target switch (pi_tramp-target_context)
 - Status bar widget showing current target
-- Shell detection (use what we're given)
+- Explicit SSH shell configuration (`shell` required)
 - `requireEntryConfirmation` safety gate
 - `targets.json` config (global + project)
 - Dynamic target creation by agent
