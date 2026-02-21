@@ -192,8 +192,11 @@ export function createRemoteBashOps(
           wrappedCmd = command;
         }
 
+        // pi's Bash tool passes timeout in seconds; transport uses milliseconds.
+        const timeoutMs = options.timeout ? options.timeout * 1000 : undefined;
+
         const result = await transport.exec(wrappedCmd, {
-          timeout: options.timeout,
+          timeout: timeoutMs,
           signal: options.signal,
         });
 

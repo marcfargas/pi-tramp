@@ -66,6 +66,7 @@ export class RemoteOperationError extends Error {
 // ---------------------------------------------------------------------------
 
 export interface ExecOptions {
+  /** Timeout in milliseconds. */
   timeout?: number;
   signal?: AbortSignal;
 }
