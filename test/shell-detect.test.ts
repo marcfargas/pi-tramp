@@ -165,4 +165,20 @@ describe("parseShellPolyglot", () => {
   it("strips ANSI codes", () => {
     expect(parseShellPolyglot("\x1b[32mCore\x1b[0m")).toBe("pwsh");
   });
+
+  it("handles noisy pwsh that echoes command containing CMD", () => {
+    // Noisy pwsh echoes the polyglot command (contains 'CMD') then outputs 'Core'
+    const noisy = '(dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition\nCore';
+    expect(parseShellPolyglot(noisy)).toBe('pwsh');
+  });
+
+  it("handles noisy cmd that echoes command with extra lines", () => {
+    const noisy = 'C:\\Users\\test>(dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition\nCMD';
+    expect(parseShellPolyglot(noisy)).toBe('cmd');
+  });
+
+  it("exact line matching — CMD substring in other text is not matched", () => {
+    expect(parseShellPolyglot('SOME_CMD_OUTPUT')).toBe('unknown');
+    expect(parseShellPolyglot('PowerShell Desktop CMD')).toBe('unknown');
+  });
 });

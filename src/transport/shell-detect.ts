@@ -81,8 +81,21 @@ export function parseArch(output: string): string {
  */
 export function parseShellPolyglot(output: string): ShellType {
   const cleaned = stripAnsi(output).trim();
-  if (cleaned.includes("CMD")) return "cmd";
-  if (cleaned.includes("Core") || cleaned.includes("Desktop")) return "pwsh";
+  const lines = cleaned.split(/\r?\n/).map((l) => l.trim());
+
+  // First pass: exact line match for PowerShell edition tokens.
+  // These must be checked before CMD because a noisy session may echo the
+  // polyglot command (which contains the literal string 'CMD') followed by
+  // the real output ('Core' or 'Desktop') on a separate line.
+  for (const line of lines) {
+    if (line === "Core" || line === "Desktop") return "pwsh";
+  }
+
+  // Second pass: exact line match for CMD.
+  for (const line of lines) {
+    if (line === "CMD") return "cmd";
+  }
+
   return "unknown";
 }
 
