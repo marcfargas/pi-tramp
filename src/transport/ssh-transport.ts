@@ -24,7 +24,7 @@ import type {
 import { BashDriver } from "../shell/bash-driver.js";
 import { PwshDriver } from "../shell/pwsh-driver.js";
 import { CommandQueue } from "./command-queue.js";
-import { parsePlatform, parseArch, parsePwshVersion } from "./shell-detect.js";
+import { parsePlatform, parseArch } from "./shell-detect.js";
 
 // On Windows, use the native SSH binary for access to Windows SSH agent.
 // On Linux/macOS, use system ssh from PATH.
@@ -32,12 +32,19 @@ const SSH_BINARY = process.platform === "win32"
   ? "C:\\Windows\\System32\\OpenSSH\\ssh.exe"
   : "ssh";
 
+// pwsh expression for $LASTEXITCODE that handles $null → 0.
+// $LASTEXITCODE is $null until an external program runs, so raw
+// interpolation like "${sentinel}_$LASTEXITCODE" omits the digits
+// and breaks the sentinel regex (\d+).
+const ESC_LASTEXITCODE = "$LASTEXITCODE -as [int]";
+
 export class SshTransport extends EventEmitter implements Transport {
   readonly type = "ssh" as const;
 
   private _shell: ShellType = "unknown";
   private _platform: PlatformType = "unknown";
   private _arch: string = "unknown";
+  private _homedir: string = "";
   private _state: TransportState = "disconnected";
   private _driver: ShellDriver | null = null;
   private queue = new CommandQueue();
@@ -57,7 +64,7 @@ export class SshTransport extends EventEmitter implements Transport {
   private readonly host: string;
   private readonly port: number;
   private readonly identityFile: string | undefined;
-  private readonly configuredShell: ShellType | undefined;
+  private configuredShell: ShellType | undefined; // mutable: set after auto-detection
   private readonly defaultTimeout: number;
 
   constructor(config: SshTargetConfig) {
@@ -74,6 +81,7 @@ export class SshTransport extends EventEmitter implements Transport {
   get shell(): ShellType { return this._shell; }
   get platform(): PlatformType { return this._platform; }
   get arch(): string { return this._arch; }
+  get homedir(): string { return this._homedir; }
   get state(): TransportState { return this._state; }
   get driver(): ShellDriver | null { return this._driver; }
 
@@ -86,6 +94,7 @@ export class SshTransport extends EventEmitter implements Transport {
       await this.spawnSsh();
       await this.detectShellAndSetup();
       await this.detectPlatformAndArch();
+      await this.detectHomedir();
 
       this._driver = this._shell === "pwsh"
         ? new PwshDriver()
@@ -212,6 +221,11 @@ export class SshTransport extends EventEmitter implements Transport {
   private killSsh(): void {
     if (this.ssh) {
       try {
+        // Remove all listeners first to prevent onSshDeath firing
+        // during intentional reconnects (e.g., shell auto-detection).
+        this.ssh.removeAllListeners();
+        this.ssh.stdout?.removeAllListeners();
+        this.ssh.stderr?.removeAllListeners();
         this.ssh.stdin?.end();
         this.ssh.kill();
       } catch {
@@ -291,14 +305,15 @@ export class SshTransport extends EventEmitter implements Transport {
     if (this.configuredShell && this.configuredShell !== "unknown") {
       this._shell = this.configuredShell;
     } else {
-      // Auto-detect: try a pwsh-specific command
+      // Auto-detect: use a unique marker for robustness against shell noise
+      // (prompts, echoed input, banners — common on Windows pwsh login shells).
+      const marker = `PITRAMP_PWSH_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
       try {
         const result = await this.execRawDual(
-          'echo "$($PSVersionTable.PSVersion.Major)"',
+          `Write-Output "${marker}"`,
           5000,
         );
-        const version = parsePwshVersion(result.stdout);
-        if (version !== null) {
+        if (result.stdout.includes(marker)) {
           this._shell = "pwsh";
         }
       } catch {
@@ -306,6 +321,15 @@ export class SshTransport extends EventEmitter implements Transport {
       }
       if (this._shell === "unknown") {
         this._shell = "bash";
+      }
+
+      // If we auto-detected pwsh as the login shell, reconnect with
+      // -NoProfile -NonInteractive for clean output (no prompts, no echo).
+      // This makes the session identical to a pre-configured shell=pwsh target.
+      if (this._shell === "pwsh") {
+        this.killSsh();
+        this.configuredShell = "pwsh";
+        await this.spawnSsh();
       }
     }
 
@@ -357,6 +381,20 @@ export class SshTransport extends EventEmitter implements Transport {
       } catch {
         this._arch = "unknown";
       }
+    }
+  }
+
+  private async detectHomedir(): Promise<void> {
+    try {
+      if (this._shell === "pwsh") {
+        const result = await this.execRaw("(Get-Location).Path", 5000);
+        this._homedir = result.stdout.trim();
+      } else {
+        const result = await this.execRaw("pwd", 5000);
+        this._homedir = result.stdout.trim();
+      }
+    } catch {
+      this._homedir = "";
     }
   }
 
@@ -443,8 +481,10 @@ export class SshTransport extends EventEmitter implements Transport {
       }, timeoutMs);
 
       // Send command + both sentinel formats
+      // pwsh: $LASTEXITCODE is $null until an external program runs.
+      // Use `-as [int]` to coerce $null → 0 so the sentinel always has digits.
       const bashSentinel = `printf '%s_%d\\n' '${sentinel}' $? 2>/dev/null`;
-      const pwshSentinel = `Write-Output "${sentinel}_$LASTEXITCODE" 2>$null`;
+      const pwshSentinel = `Write-Output "${sentinel}_$(${ESC_LASTEXITCODE})" 2>$null`;
       this.ssh.stdin!.write(`${command}\n${bashSentinel}\n${pwshSentinel}\n`);
     });
   }

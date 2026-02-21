@@ -21,7 +21,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 // Path resolution helper
 // ---------------------------------------------------------------------------
 
-function resolveRemotePath(path: string, cwd: string, platform: string): string {
+function resolveRemotePath(path: string, cwd: string | undefined, platform: string): string {
   // If already absolute, use as-is
   if (platform === "windows") {
     // Windows: C:\ or \\ paths are absolute
@@ -30,7 +30,13 @@ function resolveRemotePath(path: string, cwd: string, platform: string): string 
     // POSIX: starts with /
     if (path.startsWith("/")) return path;
   }
-  // Relative — resolve against cwd
+  // Relative — need cwd
+  if (!cwd) {
+    throw new Error(
+      `Cannot resolve relative path '${path}' — no working directory configured for this target. ` +
+      `Use an absolute path or set 'cwd' in the target config.`,
+    );
+  }
   if (platform === "windows") {
     return `${cwd}\\${path}`;
   }
@@ -171,14 +177,19 @@ export function createRemoteBashOps(
       if (!target) throw new Error("No active target");
 
       return pool.execOnTarget(target.name, async (transport) => {
-        // Wrap command with cd to target cwd
+        // Wrap command with cd to target cwd (if configured)
         const cwd = target.config.cwd;
         let wrappedCmd: string;
 
-        if (transport.shell === "pwsh") {
-          wrappedCmd = `Set-Location ${escapePwshSimple(cwd)}; ${command}`;
+        if (cwd) {
+          if (transport.shell === "pwsh") {
+            wrappedCmd = `Set-Location ${escapePwshSimple(cwd)}; ${command}`;
+          } else {
+            wrappedCmd = `cd ${escapeBashSimple(cwd)} && ${command}`;
+          }
         } else {
-          wrappedCmd = `cd ${escapeBashSimple(cwd)} && ${command}`;
+          // No cwd — run in whatever directory the transport lands in (homedir)
+          wrappedCmd = command;
         }
 
         const result = await transport.exec(wrappedCmd, {

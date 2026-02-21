@@ -33,6 +33,7 @@ export class DockerTransport extends EventEmitter implements Transport {
   private _shell: ShellType = "unknown";
   private _platform: PlatformType = "unknown";
   private _arch: string = "unknown";
+  private _homedir: string = "";
   private _state: TransportState = "disconnected";
   private _driver: ShellDriver | null = null;
   private queue = new CommandQueue();
@@ -53,6 +54,7 @@ export class DockerTransport extends EventEmitter implements Transport {
   get shell(): ShellType { return this._shell; }
   get platform(): PlatformType { return this._platform; }
   get arch(): string { return this._arch; }
+  get homedir(): string { return this._homedir; }
   get state(): TransportState { return this._state; }
   get driver(): ShellDriver | null { return this._driver; }
 
@@ -77,8 +79,9 @@ export class DockerTransport extends EventEmitter implements Transport {
         await this.detectShell();
       }
 
-      // Detect platform and arch
+      // Detect platform, arch, and home directory
       await this.detectPlatformAndArch();
+      await this.detectHomedir();
 
       // Create appropriate shell driver
       this._driver = this._shell === "pwsh"
@@ -188,6 +191,20 @@ export class DockerTransport extends EventEmitter implements Transport {
       } catch {
         this._arch = "unknown";
       }
+    }
+  }
+
+  private async detectHomedir(): Promise<void> {
+    try {
+      if (this._shell === "pwsh") {
+        const result = await this.rawExec("(Get-Location).Path", 5000);
+        this._homedir = result.stdout.trim();
+      } else {
+        const result = await this.rawExec("pwd", 5000);
+        this._homedir = result.stdout.trim();
+      }
+    } catch {
+      this._homedir = "";
     }
   }
 

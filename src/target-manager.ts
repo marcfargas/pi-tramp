@@ -11,7 +11,7 @@ import { EventEmitter } from "events";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
 import { homedir } from "os";
-import { TargetsFileSchema, type Target, type TargetConfig, type TargetsFile } from "./types.js";
+import { TargetsFileSchema, TargetConfigSchema, type Target, type TargetConfig, type TargetsFile } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Events
@@ -149,9 +149,12 @@ export class TargetManager extends EventEmitter {
       throw new Error("Target name must be alphanumeric with dashes/underscores");
     }
 
+    // Validate config through Zod schema
+    const validated = TargetConfigSchema.parse(config);
+
     const target: Target = {
       name,
-      config,
+      config: validated,
       isDynamic: !persist,
     };
     this.targets.set(name, target);

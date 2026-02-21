@@ -13,7 +13,7 @@ import type { ExtensionAPI, AgentToolResult } from "@mariozechner/pi-coding-agen
 import { Type } from "@sinclair/typebox";
 import type { TargetManager } from "./target-manager.js";
 import type { ConnectionPool } from "./connection-pool.js";
-import type { TargetConfig } from "./types.js";
+import { type TargetConfig, TargetConfigSchema } from "./types.js";
 import type { RuntimeState } from "./tool-overrides.js";
 
 const targetSchema = Type.Object({
@@ -143,14 +143,21 @@ async function handleSwitch(
   try {
     // Eagerly connect to validate the target works
     const transport = await pool.getConnection(name);
+
+    // Auto-fill cwd from remote homedir if not configured
+    if (!target.config.cwd && transport.homedir) {
+      target.config.cwd = transport.homedir;
+    }
+
     tm.switchTarget(name);
 
+    const effectiveCwd = target.config.cwd ?? "(unknown — will use remote default)";
     const info = [
       `Switched to target '${name}'.`,
       `  Type: ${target.config.type}`,
       `  Shell: ${transport.shell}`,
       `  Platform: ${transport.platform} (${transport.arch})`,
-      `  CWD: ${target.config.cwd}`,
+      `  CWD: ${effectiveCwd}`,
       "",
       "All read/write/edit/bash commands now execute on this target.",
     ];
@@ -194,11 +201,15 @@ function handleAdd(
   configJson?: string,
 ): AgentToolResult<unknown> {
   if (!name || !configJson) {
-    return textResult("Usage: target add <name> --config '{\"type\":\"ssh\",\"host\":\"user@host\",\"port\":22,\"cwd\":\"/home\"}'");
+    return textResult(
+      "Usage: target add <name> --config '{\"type\":\"ssh\",\"host\":\"user@host\"}'\n" +
+      "cwd is optional — auto-detected from remote home directory on connect.",
+    );
   }
 
   try {
-    const config = JSON.parse(configJson) as TargetConfig;
+    const raw = JSON.parse(configJson);
+    const config = TargetConfigSchema.parse(raw);
     tm.createTarget(name, config);
     return textResult(`Target '${name}' added (dynamic, not persisted).`);
   } catch (err) {

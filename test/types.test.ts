@@ -52,10 +52,22 @@ describe("TargetConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects missing cwd", () => {
+  it("accepts missing cwd (auto-detected on connect)", () => {
     const result = TargetConfigSchema.safeParse({
       type: "ssh",
       host: "user@host",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cwd).toBeUndefined();
+    }
+  });
+
+  it("rejects empty cwd string", () => {
+    const result = TargetConfigSchema.safeParse({
+      type: "ssh",
+      host: "user@host",
+      cwd: "",
     });
     expect(result.success).toBe(false);
   });
