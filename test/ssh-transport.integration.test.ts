@@ -1,7 +1,10 @@
 /**
- * SshTransport integration tests.
+ * SshTransport integration tests — Linux containers only.
  *
  * Requires: docker run -d --name pi-tramp-ssh-test -p 2222:22 pi-tramp-ssh-test
+ *
+ * Windows: skipped — Linux-specific paths (/workspace, rm, testuser-pwsh).
+ * Windows SSH coverage is provided by e2e.integration.test.ts.
  *
  * Run: npm run test:integration
  */
@@ -10,6 +13,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { SshTransport } from "../src/transport/ssh-transport.js";
+import { getTestPlatform } from "./helpers/platform.js";
+
+const isWindows = getTestPlatform().os === "windows";
 import type { SshTargetConfig } from "../src/types.js";
 import { join } from "path";
 
@@ -21,7 +27,7 @@ const KEY_PATH = join(TEMP, "pi-tramp-test-key");
 
 let transport: SshTransport;
 
-describe("SshTransport", () => {
+describe.skipIf(isWindows)("SshTransport", () => {
   beforeAll(async () => {
     // Ensure SSH container is running
     try {

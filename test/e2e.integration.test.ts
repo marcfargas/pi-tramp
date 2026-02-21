@@ -68,6 +68,10 @@ const scenarios: Scenario[] = [
   ...(isWindows ? [] : [
     { name: "SSH × auto-detect (bash)", targetName: "ssh-auto-bash", transport: "ssh" as const, shell: "bash" as TestShell },
   ]),
+  // SSH auto-detect: no shell configured, default shell is pwsh (Windows container)
+  ...(isWindows ? [
+    { name: "SSH × auto-detect (pwsh)", targetName: "ssh-auto-pwsh", transport: "ssh" as const, shell: "pwsh" as TestShell },
+  ] : []),
   // SSH explicit: user configures shell, forced as SSH remote command
   ...(isWindows ? [] : [
     { name: "SSH × explicit bash", targetName: "ssh-explicit-bash", transport: "ssh" as const, shell: "bash" as TestShell },
@@ -104,10 +108,17 @@ describe("End-to-End", () => {
       type: "docker", container: P.dockerContainer, cwd: P.workspace, shell: "pwsh",
     } as TargetConfig);
 
-    // SSH auto-detect — no shell configured, server default is bash (clean)
+    // SSH auto-detect — no shell configured, server default is bash (clean, Linux)
     if (!isWindows) {
       tm.createTarget("ssh-auto-bash", {
         type: "ssh", host: `${SSH_BASH_USER}@${P.sshHost}`, ...SSH_BASE,
+      } as TargetConfig);
+    }
+
+    // SSH auto-detect — no shell configured, server default is pwsh (Windows)
+    if (isWindows) {
+      tm.createTarget("ssh-auto-pwsh", {
+        type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`, ...SSH_BASE,
       } as TargetConfig);
     }
 
@@ -282,8 +293,10 @@ describe("End-to-End", () => {
   describe("SSH shell errors", () => {
     // Noisy default shell: pwsh login shell echoes input + shows prompts.
     // Auto-detect without explicit shell config should error with helpful message.
-    if (!isWindows) {
-      it("errors when default shell is noisy (pwsh login shell, no shell configured)", async () => {
+    // Linux-only: Linux container has a noisy-pwsh-default user for this test.
+    it.skipIf(isWindows)(
+      "errors when default shell is noisy (pwsh login shell, no shell configured)",
+      async () => {
         const noisyTm = new TargetManager();
         noisyTm.createTarget("noisy-pwsh", {
           type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`, ...SSH_BASE,
@@ -296,13 +309,14 @@ describe("End-to-End", () => {
 
         await noisyPool.closeAll();
       });
-    }
 
     // Explicit shell works regardless of user's default — the configured
     // shell is forced as SSH remote command. If the shell binary exists
     // on the server, it starts correctly (e.g., pwsh on a bash-default user).
-    if (!isWindows) {
-      it("explicit pwsh works even when user default is bash", async () => {
+    // Linux-only: requires separate testuser (bash default) + pwsh installed.
+    it.skipIf(isWindows)(
+      "explicit pwsh works even when user default is bash",
+      async () => {
         // testuser's default is bash, but shell: "pwsh" forces SSH to run
         // pwsh -NonInteractive -Command -, which succeeds because pwsh is installed.
         const crossTm = new TargetManager();
@@ -319,7 +333,6 @@ describe("End-to-End", () => {
 
         await crossPool.closeAll();
       });
-    }
   });
 
   // =========================================================================

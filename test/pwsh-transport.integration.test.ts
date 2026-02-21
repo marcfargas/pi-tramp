@@ -19,24 +19,29 @@ import { join } from "path";
 import { DockerTransport } from "../src/transport/docker-transport.js";
 import { SshTransport } from "../src/transport/ssh-transport.js";
 import type { DockerTargetConfig, SshTargetConfig } from "../src/types.js";
+import { getTestPlatform } from "./helpers/platform.js";
 
 const execFileAsync = promisify(execFile);
 const TEMP = process.env.TEMP || process.env.TMP || "/tmp";
 const KEY_PATH = join(TEMP, "pi-tramp-test-key");
 
+const P = getTestPlatform();
+const isWindows = P.os === "windows";
+
 const DOCKER_CONTAINER = "pi-tramp-pwsh-docker";
-const SSH_CONTAINER = "pi-tramp-ssh-test";
-const IMAGE = "pi-tramp-ssh-test";
+const SSH_CONTAINER = P.sshContainer;
+const IMAGE = P.image;
 
 // =========================================================================
 // Docker + pwsh
 // =========================================================================
-describe("DockerTransport (pwsh)", () => {
+// Linux-only: uses /workspace paths and testuser-pwsh — e2e.integration.test.ts covers Windows.
+describe.skipIf(isWindows)("DockerTransport (pwsh)", () => {
   let transport: DockerTransport;
 
   beforeAll(async () => {
     try { await execFileAsync("docker", ["rm", "-f", DOCKER_CONTAINER]); } catch { /* */ }
-    await execFileAsync("docker", ["run", "-d", "--name", DOCKER_CONTAINER, IMAGE, "sleep", "infinity"]);
+    await execFileAsync("docker", ["run", "-d", "--name", DOCKER_CONTAINER, IMAGE, ...P.keepaliveArgs]);
     await new Promise((r) => setTimeout(r, 500));
 
     transport = new DockerTransport({
@@ -127,7 +132,8 @@ describe("DockerTransport (pwsh)", () => {
 // =========================================================================
 // SSH + pwsh (testuser-pwsh has pwsh as login shell)
 // =========================================================================
-describe("SshTransport (pwsh)", () => {
+// Linux-only: uses /workspace paths, testuser-pwsh user — e2e.integration.test.ts covers Windows.
+describe.skipIf(isWindows)("SshTransport (pwsh)", () => {
   let transport: SshTransport;
 
   beforeAll(async () => {
