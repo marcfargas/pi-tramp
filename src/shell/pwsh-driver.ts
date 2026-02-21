@@ -38,9 +38,13 @@ export class PwshDriver implements ShellDriver {
   /**
    * Command to read a file as base64.
    * Uses .NET [Convert]::ToBase64String for reliable base64 encoding.
+   *
+   * Note: paths MUST be single-quoted even if they look safe, because inside
+   * .NET method calls like [IO.File]::ReadAllBytes(), an unquoted / is parsed
+   * as division, not a path separator.
    */
   readFileCommand(absolutePath: string): string {
-    const escaped = this.shellEscape(absolutePath);
+    const escaped = this.forceQuote(absolutePath);
     return `[Convert]::ToBase64String([IO.File]::ReadAllBytes(${escaped}))`;
   }
 
@@ -52,10 +56,10 @@ export class PwshDriver implements ShellDriver {
    * This is a documented limitation (see specs/atomic-write.md).
    */
   writeFileCommand(absolutePath: string, base64Content: string, tmpPath: string): string {
-    const escapedDst = this.shellEscape(absolutePath);
-    const escapedTmp = this.shellEscape(tmpPath);
-    const escapedParent = this.shellEscape(this.dirname(absolutePath));
-    const escapedB64 = this.shellEscape(base64Content);
+    const escapedDst = this.forceQuote(absolutePath);
+    const escapedTmp = this.forceQuote(tmpPath);
+    const escapedParent = this.forceQuote(this.dirname(absolutePath));
+    const escapedB64 = this.forceQuote(base64Content);
 
     return [
       `$d = ${escapedParent}`,
@@ -80,6 +84,14 @@ export class PwshDriver implements ShellDriver {
   statCommand(absolutePath: string): string {
     const escaped = this.shellEscape(absolutePath);
     return `if (Test-Path -PathType Leaf ${escaped}) { 'file' } elseif (Test-Path -PathType Container ${escaped}) { 'directory' } elseif (Test-Path ${escaped}) { 'other' } else { 'missing' }`;
+  }
+
+  /**
+   * Always single-quote an argument (for .NET method calls where bare paths
+   * with / are parsed as division).
+   */
+  private forceQuote(arg: string): string {
+    return "'" + arg.replace(/'/g, "''") + "'";
   }
 
   /**

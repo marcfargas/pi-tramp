@@ -141,6 +141,12 @@ export class SshTransport extends EventEmitter implements Transport {
       // Host
       args.push(this.host);
 
+      // Always force bash as the outer shell for SSH.
+      // Even for pwsh targets, we use bash for the sentinel protocol
+      // (clean output, no prompts) and wrap pwsh commands via
+      // `pwsh -NoProfile -NonInteractive -Command '...'`.
+      args.push("bash", "--norc", "--noprofile");
+
       this.ssh = spawn(WIN_SSH, args, {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
@@ -188,7 +194,7 @@ export class SshTransport extends EventEmitter implements Transport {
       };
       this.currentTimeout = timeout;
 
-      // Send ready probe
+      // Send ready probe (outer shell is always bash)
       const probeCmd = `printf '%s_%d\\n' '${probeSentinel}' 0\n`;
       this.ssh.stdin!.write(probeCmd);
     });
@@ -243,7 +249,10 @@ export class SshTransport extends EventEmitter implements Transport {
     this.buffer = lines.pop()!; // Keep incomplete last line
 
     for (const line of lines) {
-      const cleaned = line.replace(/\r$/, "");
+      // Strip carriage returns and ANSI escape sequences (pwsh interactive mode emits
+      // [?1h, [?1l, color codes, etc. even with -T and $PSStyle.OutputRendering = 'PlainText')
+      // eslint-disable-next-line no-control-regex
+      const cleaned = line.replace(/\r$/, "").replace(/\x1b[\[\(][^\x1b]*?[a-zA-Z]|\x1b\][^\x07]*\x07/g, "");
 
       if (this.sentinelRegex) {
         const match = cleaned.match(this.sentinelRegex);
@@ -270,44 +279,33 @@ export class SshTransport extends EventEmitter implements Transport {
   // --- Shell detection + setup ---
 
   private async detectShellAndSetup(): Promise<void> {
+    // Outer shell is always bash. Shell detection determines the COMMAND
+    // LANGUAGE: if pwsh is available and configured/detected, commands are
+    // wrapped in `pwsh -NonInteractive -Command '...'`.
+
     if (this.configuredShell && this.configuredShell !== "unknown") {
       this._shell = this.configuredShell;
-    } else {
-      // Probe for PowerShell first
-      try {
-        const result = await this.execRaw("$PSVersionTable.PSVersion.Major", 5000);
-        const version = parsePwshVersion(result.stdout);
-        if (version !== null) {
-          this._shell = "pwsh";
-        }
-      } catch {
-        // Not pwsh
-      }
 
-      if (this._shell === "unknown") {
-        // Probe for shell name
+      // Verify pwsh is available if configured
+      if (this._shell === "pwsh") {
         try {
-          const result = await this.execRaw('echo "$0"', 5000);
-          this._shell = parseShellName(result.stdout);
-          if (this._shell === "unknown") this._shell = "sh";
+          const result = await this.execRaw(
+            "pwsh -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.Major'",
+            5000,
+          );
+          const version = parsePwshVersion(result.stdout);
+          if (version === null) {
+            throw new Error("pwsh not found");
+          }
         } catch {
-          this._shell = "sh";
+          // pwsh not available — fall back to bash
+          this._shell = "bash";
         }
       }
-    }
-
-    // PowerShell session setup
-    if (this._shell === "pwsh") {
-      try {
-        await this.execRaw(
-          "try { $PSStyle.OutputRendering = 'PlainText' } catch {}; " +
-          "$ProgressPreference = 'SilentlyContinue'; " +
-          "$global:LASTEXITCODE = 0",
-          5000,
-        );
-      } catch {
-        // Non-fatal — continue
-      }
+    } else {
+      // No shell configured — outer shell is always bash, so default to bash.
+      // Users who want pwsh should configure shell: "pwsh" in their target.
+      this._shell = "bash";
     }
   }
 
@@ -429,14 +427,31 @@ export class SshTransport extends EventEmitter implements Transport {
         try { this.ssh?.stdin?.write("\x03\n"); } catch { /* ignore */ }
       }, timeout);
 
-      // Wrap command with sentinel
-      let wrapped: string;
+      // Outer shell is always bash (even for pwsh targets).
+      // For pwsh targets, wrap the command in a pwsh invocation.
+      let effectiveCmd: string;
       if (this._shell === "pwsh") {
-        // Reset $LASTEXITCODE before each command (it's sticky in PowerShell)
-        wrapped = `$global:LASTEXITCODE = 0\n${command}\nWrite-Output "${sentinel}_$LASTEXITCODE"\n`;
+        // Build the full pwsh script to run:
+        // 1. Suppress ANSI rendering (pwsh 7.2+)
+        // 2. Suppress progress bars
+        // 3. Reset sticky $LASTEXITCODE
+        // 4. Run the actual command
+        // 5. Exit with $LASTEXITCODE so bash $? gets the right code
+        const pwshSetup =
+          'try { $PSStyle.OutputRendering = "PlainText" } catch {}; ' +
+          '$ProgressPreference = "SilentlyContinue"; ' +
+          "$global:LASTEXITCODE = 0";
+        const fullPwshScript = `${pwshSetup}; ${command}; exit $LASTEXITCODE`;
+
+        // Bash-escape the entire pwsh script for embedding in single quotes
+        const bashEscaped = fullPwshScript.replace(/'/g, "'\\''");
+        effectiveCmd = `pwsh -NoProfile -NonInteractive -Command '${bashEscaped}'`;
       } else {
-        wrapped = `${command}\nprintf '%s_%d\\n' '${sentinel}' $?\n`;
+        effectiveCmd = command;
       }
+
+      // Always use bash sentinel (outer shell is always bash)
+      const wrapped = `${effectiveCmd}\nprintf '%s_%d\\n' '${sentinel}' $?\n`;
 
       this.ssh.stdin!.write(wrapped);
     });
