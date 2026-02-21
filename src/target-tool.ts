@@ -31,7 +31,7 @@ const targetSchema = Type.Object({
     Type.String({ description: "Target name (for switch, add, remove)" }),
   ),
   config: Type.Optional(
-    Type.String({ description: "JSON config for add action (e.g., {\"type\":\"ssh\",\"host\":\"user@host\",\"port\":22,\"cwd\":\"/home/user\"})" }),
+    Type.String({ description: "JSON config for add action (e.g., {\"type\":\"ssh\",\"host\":\"user@host\",\"port\":22,\"cwd\":\"/home/user\",\"shell\":\"bash\"}) or {\"type\":\"docker\",\"container\":\"name\",\"cwd\":\"/path\"}. Note: shell is required for SSH." }),
   ),
 });
 
@@ -54,7 +54,7 @@ Actions:
 - list: Show configured targets and which is active
 - switch <name>: Connect to a target. All subsequent read/write/edit/bash calls execute there. Use "local" to return to local execution.
 - status: Show connection health for all targets
-- add <name> --config <json>: Add a target. Config: {"type":"ssh","host":"user@host","port":22,"cwd":"/path"} or {"type":"docker","container":"name","cwd":"/path"}. Optional: "shell":"pwsh" for PowerShell targets.
+- add <name> --config <json>: Add a target. Config: {"type":"ssh","host":"user@host","port":22,"cwd":"/path","shell":"bash"} or {"type":"docker","container":"name","cwd":"/path"}. Note: "shell" is required for SSH targets ("bash" for Linux/macOS, "pwsh" for Windows).
 - remove <name>: Remove a dynamic target
 
 After switching, you do NOT need special syntax — just use read/write/edit/bash normally and they execute on the remote target transparently.`,
@@ -202,8 +202,8 @@ function handleAdd(
 ): AgentToolResult<unknown> {
   if (!name || !configJson) {
     return textResult(
-      "Usage: target add <name> --config '{\"type\":\"ssh\",\"host\":\"user@host\"}'\n" +
-      "cwd is optional — auto-detected from remote home directory on connect.",
+      "Usage: target add <name> --config '{\"type\":\"ssh\",\"host\":\"user@host\",\"shell\":\"bash\"}'\n" +
+      "SSH requires: host, shell (\"bash\" or \"pwsh\"). cwd is optional — auto-detected from remote home directory on connect.",
     );
   }
 

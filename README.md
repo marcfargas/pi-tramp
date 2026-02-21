@@ -17,7 +17,7 @@ pi -e pi-tramp
 Then use the `target` tool in a pi session:
 
 ```
-> target add myserver --config {"type":"ssh","host":"user@myserver.example.com"}
+> target add myserver --config {"type":"ssh","host":"user@myserver.example.com","shell":"bash"}
 > target switch myserver
 # All tool calls now execute on myserver
 ```
@@ -29,7 +29,7 @@ Then use the `target` tool in a pi session:
 The fastest way — add targets on the fly:
 
 ```
-> target add dev --config {"type":"ssh","host":"user@dev.example.com","cwd":"/home/user/project"}
+> target add dev --config {"type":"ssh","host":"user@dev.example.com","cwd":"/home/user/project","shell":"bash"}
 > target switch dev
 ```
 
@@ -44,13 +44,15 @@ Create `.pi/targets.json` in your project (or `~/.pi/targets.json` globally):
     "dev": {
       "type": "ssh",
       "host": "user@dev-server.example.com",
-      "cwd": "/home/user/project"
+      "cwd": "/home/user/project",
+      "shell": "bash"
     },
     "staging": {
       "type": "ssh",
       "host": "deploy@staging.example.com",
       "identityFile": "~/.ssh/staging_key",
-      "cwd": "/opt/app"
+      "cwd": "/opt/app",
+      "shell": "bash"
     },
     "docker-dev": {
       "type": "docker",
@@ -81,20 +83,19 @@ Project config overrides global by target name. The `default` target auto-connec
 
 - **Keys only** — no password auth (SSH agent or `identityFile`)
 - **Persistent connection** — single SSH process, sentinel protocol for command demarcation
-- **Shell auto-detection** — on connect, probes for pwsh then bash. Override with `"shell": "bash"` or `"shell": "pwsh"`
+- **`shell` is required** — set `"shell": "bash"` for Linux/macOS targets, `"shell": "pwsh"` for Windows/PowerShell targets
 - **`cwd` is optional** — if omitted, auto-detected from remote home directory
 - Uses Windows SSH (`C:\Windows\System32\OpenSSH\ssh.exe`) on Windows for agent access
 
 #### pwsh targets (Windows servers, PowerShell hosts)
 
-When connecting to a host with PowerShell as the default shell (common on Windows), pi-tramp:
+When `"shell": "pwsh"` is configured, pi-tramp:
 
-1. Auto-detects pwsh via a marker-based probe during connect
-2. Reconnects with a clean `-NoProfile -NonInteractive` session
-3. Wraps all commands in pwsh-compatible syntax
-4. Uses .NET APIs for file I/O (`[IO.File]::ReadAllBytes`, `[Convert]::ToBase64String`)
+1. Connects with a clean `-NoProfile -NonInteractive` session
+2. Wraps all commands in pwsh-compatible syntax
+3. Uses .NET APIs for file I/O (`[IO.File]::ReadAllBytes`, `[Convert]::ToBase64String`)
 
-Set `"shell": "pwsh"` explicitly if auto-detection fails or to skip the probe.
+Set `"shell": "pwsh"` for any target running Windows PowerShell or PowerShell 7+.
 
 ### Docker
 
@@ -164,7 +165,7 @@ On target switch, pi-tramp:
 | `identityFile` | string | — | — | Path to SSH private key |
 | `container` | string | Docker only | — | Container name or ID |
 | `cwd` | string | — | home dir | Remote working directory |
-| `shell` | `"bash"` \| `"sh"` \| `"pwsh"` | — | auto-detect | Override shell detection |
+| `shell` | `"bash"` \| `"sh"` \| `"pwsh"` | SSH: ✅ | — | Shell to use: `"bash"` for Linux/macOS, `"pwsh"` for Windows |
 | `timeout` | number (ms) | — | SSH: 60000, Docker: 30000 | Command timeout |
 
 ### Targets File
@@ -236,7 +237,7 @@ const result = await trampExec("make build", {
 **Key design decisions:**
 - **Serial command queue** — prevents concurrent SSH session corruption
 - **Sentinel protocol** — UUID markers delimit command output in persistent SSH
-- **Shell auto-detection** — probes for pwsh, then bash, with reconnect for clean sessions
+- **Explicit shell config** — `shell` is required for SSH; no probe/reconnect overhead
 - **Base64 for file I/O** — reliable binary transfer (bash: `base64`, pwsh: .NET APIs)
 - **CRLF handling** — pi's edit tool transparently normalizes line endings for matching, then restores original endings on write
 - **10MB file limit** — clear errors for oversized files
