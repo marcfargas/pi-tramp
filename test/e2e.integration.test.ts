@@ -22,6 +22,7 @@ import {
   createRemoteEditOps,
   createRemoteBashOps,
 } from "../src/operations/remote-ops.js";
+import { createEditTool } from "@mariozechner/pi-coding-agent";
 import { initTrampExec, trampExec } from "../src/tramp-exec.js";
 import type { TargetConfig } from "../src/types.js";
 
@@ -440,6 +441,121 @@ describe("End-to-End", () => {
       expect(read.equals(binary)).toBe(true);
 
       await transport.exec("rm /workspace/e2e-ssh-binary.bin");
+    });
+  });
+
+  // =========================================================================
+  // CRLF handling in edit operations
+  // =========================================================================
+  describe("CRLF handling", () => {
+    it("Docker: edit preserves CRLF line endings", async () => {
+      tm.switchTarget("docker-test");
+
+      // Write a file with CRLF endings (simulating a Windows file)
+      const crlfContent = "line1\r\nline2\r\nline3\r\n";
+      const transport = await pool.getConnection("docker-test");
+      await transport.writeFile("/workspace/e2e-crlf.txt", Buffer.from(crlfContent, "utf8"));
+
+      // Use pi's createEditTool with remote ops — this is the real edit path
+      const editOps = createRemoteEditOps(pool, tm);
+      const tool = createEditTool("/workspace", { operations: editOps });
+
+      // Edit with LF oldText (as the LLM would send it)
+      const result = await tool.execute("test-id", {
+        path: "/workspace/e2e-crlf.txt",
+        oldText: "line2",
+        newText: "MODIFIED",
+      });
+
+      // Verify success
+      expect(result.content[0]).toHaveProperty("text");
+      expect((result.content[0] as { text: string }).text).toContain("Successfully");
+
+      // Read back and verify CRLF is preserved
+      const final = await transport.readFile("/workspace/e2e-crlf.txt");
+      const finalStr = final.toString("utf8");
+      expect(finalStr).toBe("line1\r\nMODIFIED\r\nline3\r\n");
+
+      // Verify no stray LF-only endings
+      const lfOnly = finalStr.replace(/\r\n/g, "").indexOf("\n");
+      expect(lfOnly).toBe(-1);
+
+      await transport.exec("rm /workspace/e2e-crlf.txt");
+    });
+
+    it("SSH: edit preserves CRLF line endings", async () => {
+      tm.switchTarget("ssh-test");
+
+      const crlfContent = "alpha\r\nbeta\r\ngamma\r\n";
+      const transport = await pool.getConnection("ssh-test");
+      await transport.writeFile("/workspace/e2e-ssh-crlf.txt", Buffer.from(crlfContent, "utf8"));
+
+      const editOps = createRemoteEditOps(pool, tm);
+      const tool = createEditTool("/workspace", { operations: editOps });
+
+      const result = await tool.execute("test-id", {
+        path: "/workspace/e2e-ssh-crlf.txt",
+        oldText: "beta",
+        newText: "CHANGED",
+      });
+
+      expect((result.content[0] as { text: string }).text).toContain("Successfully");
+
+      const final = await transport.readFile("/workspace/e2e-ssh-crlf.txt");
+      expect(final.toString("utf8")).toBe("alpha\r\nCHANGED\r\ngamma\r\n");
+
+      await transport.exec("rm /workspace/e2e-ssh-crlf.txt");
+    });
+
+    it("Docker: edit preserves LF line endings", async () => {
+      tm.switchTarget("docker-test");
+
+      const lfContent = "line1\nline2\nline3\n";
+      const transport = await pool.getConnection("docker-test");
+      await transport.writeFile("/workspace/e2e-lf.txt", Buffer.from(lfContent, "utf8"));
+
+      const editOps = createRemoteEditOps(pool, tm);
+      const tool = createEditTool("/workspace", { operations: editOps });
+
+      await tool.execute("test-id", {
+        path: "/workspace/e2e-lf.txt",
+        oldText: "line2",
+        newText: "MODIFIED",
+      });
+
+      const final = await transport.readFile("/workspace/e2e-lf.txt");
+      const finalStr = final.toString("utf8");
+      expect(finalStr).toBe("line1\nMODIFIED\nline3\n");
+
+      // Verify no CRLF introduced
+      expect(finalStr.indexOf("\r")).toBe(-1);
+
+      await transport.exec("rm /workspace/e2e-lf.txt");
+    });
+
+    it("Docker: edit with multi-line oldText containing CRLF mismatch", async () => {
+      tm.switchTarget("docker-test");
+
+      // File has CRLF
+      const crlfContent = "function hello() {\r\n  return 'world';\r\n}\r\n";
+      const transport = await pool.getConnection("docker-test");
+      await transport.writeFile("/workspace/e2e-crlf-multi.txt", Buffer.from(crlfContent, "utf8"));
+
+      const editOps = createRemoteEditOps(pool, tm);
+      const tool = createEditTool("/workspace", { operations: editOps });
+
+      // LLM sends oldText with LF (as it always does)
+      await tool.execute("test-id", {
+        path: "/workspace/e2e-crlf-multi.txt",
+        oldText: "function hello() {\n  return 'world';\n}",
+        newText: "function hello() {\n  return 'universe';\n}",
+      });
+
+      const final = await transport.readFile("/workspace/e2e-crlf-multi.txt");
+      // Result should have CRLF preserved
+      expect(final.toString("utf8")).toBe("function hello() {\r\n  return 'universe';\r\n}\r\n");
+
+      await transport.exec("rm /workspace/e2e-crlf-multi.txt");
     });
   });
 });
