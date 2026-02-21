@@ -64,7 +64,7 @@ Project config (`.pi/targets.json`) overrides global (`~/.pi/targets.json`) by t
 
 - **Keys only** — no password auth (SSH agent or `identityFile`)
 - **Persistent connection** — single SSH process, sentinel protocol for command demarcation
-- **Shell detection** — auto-detects bash/sh/pwsh on connect
+- **Shell**: defaults to bash. Set `"shell": "pwsh"` for PowerShell targets — commands are wrapped in `pwsh -NonInteractive -Command '...'`
 - Uses Windows SSH (`C:\Windows\System32\OpenSSH\ssh.exe`) on Windows for agent access
 
 ### Docker

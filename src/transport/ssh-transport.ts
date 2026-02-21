@@ -26,8 +26,11 @@ import { PwshDriver } from "../shell/pwsh-driver.js";
 import { CommandQueue } from "./command-queue.js";
 import { parseShellName, parsePlatform, parseArch, parsePwshVersion } from "./shell-detect.js";
 
-// Windows SSH binary — has access to Windows SSH agent
-const WIN_SSH = "C:\\Windows\\System32\\OpenSSH\\ssh.exe";
+// On Windows, use the native SSH binary for access to Windows SSH agent.
+// On Linux/macOS, use system ssh from PATH.
+const SSH_BINARY = process.platform === "win32"
+  ? "C:\\Windows\\System32\\OpenSSH\\ssh.exe"
+  : "ssh";
 
 export class SshTransport extends EventEmitter implements Transport {
   readonly type = "ssh" as const;
@@ -147,7 +150,7 @@ export class SshTransport extends EventEmitter implements Transport {
       // `pwsh -NoProfile -NonInteractive -Command '...'`.
       args.push("bash", "--norc", "--noprofile");
 
-      this.ssh = spawn(WIN_SSH, args, {
+      this.ssh = spawn(SSH_BINARY, args, {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
