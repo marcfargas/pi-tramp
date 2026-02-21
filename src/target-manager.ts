@@ -9,7 +9,7 @@
 
 import { EventEmitter } from "events";
 import { readFile } from "fs/promises";
-import { resolve, join } from "path";
+import { resolve } from "path";
 import { homedir } from "os";
 import { TargetsFileSchema, type Target, type TargetConfig, type TargetsFile } from "./types.js";
 
@@ -41,7 +41,7 @@ async function loadConfigFile(filePath: string): Promise<TargetsFile | null> {
     return result.data;
   } catch (err: unknown) {
     if (err instanceof SyntaxError) {
-      throw new Error(`Invalid JSON in ${filePath}: ${err.message}`);
+      throw new Error(`Invalid JSON in ${filePath}: ${err.message}`, { cause: err });
     }
     if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
       return null; // File doesn't exist — that's fine

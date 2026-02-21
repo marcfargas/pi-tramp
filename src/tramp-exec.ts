@@ -5,7 +5,7 @@
  * (or a specific) remote target.
  */
 
-import type { ExecResult, ExecOptions } from "./types.js";
+import type { ExecResult } from "./types.js";
 import type { ConnectionPool } from "./connection-pool.js";
 import type { TargetManager } from "./target-manager.js";
 

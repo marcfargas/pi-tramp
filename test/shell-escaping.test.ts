@@ -150,6 +150,7 @@ describe("PwshDriver.shellEscape (real pwsh)", () => {
     // - unicode/emoji: PS 5.1 uses OEM codepage, not UTF-8
     // In real usage, .NET APIs (ReadAllBytes/WriteAllBytes) handle all bytes correctly.
     const skipConsole = tc.input.includes("\n") || tc.input.includes("\t")
+      // eslint-disable-next-line no-control-regex
       || /[^\x00-\x7F]/.test(tc.input);
     if (skipConsole) {
       it.skip(`round-trips: ${tc.name} (console encoding limitation — .NET API handles correctly)`, () => {});

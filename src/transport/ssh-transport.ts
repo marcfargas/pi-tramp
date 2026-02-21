@@ -24,7 +24,7 @@ import type {
 import { BashDriver } from "../shell/bash-driver.js";
 import { PwshDriver } from "../shell/pwsh-driver.js";
 import { CommandQueue } from "./command-queue.js";
-import { parseShellName, parsePlatform, parseArch, parsePwshVersion } from "./shell-detect.js";
+import { parsePlatform, parseArch, parsePwshVersion } from "./shell-detect.js";
 
 // On Windows, use the native SSH binary for access to Windows SSH agent.
 // On Linux/macOS, use system ssh from PATH.
@@ -255,7 +255,7 @@ export class SshTransport extends EventEmitter implements Transport {
       // Strip carriage returns and ANSI escape sequences (pwsh interactive mode emits
       // [?1h, [?1l, color codes, etc. even with -T and $PSStyle.OutputRendering = 'PlainText')
       // eslint-disable-next-line no-control-regex
-      const cleaned = line.replace(/\r$/, "").replace(/\x1b[\[\(][^\x1b]*?[a-zA-Z]|\x1b\][^\x07]*\x07/g, "");
+      const cleaned = line.replace(/\r$/, "").replace(/\x1b[[(][^\x1b]*?[a-zA-Z]|\x1b\][^\x07]*\x07/g, "");
 
       if (this.sentinelRegex) {
         const match = cleaned.match(this.sentinelRegex);

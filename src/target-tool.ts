@@ -99,17 +99,11 @@ function handleList(tm: TargetManager): AgentToolResult<unknown> {
     const active = current && current.name === t.name ? " ← active" : "";
     const dynamic = t.isDynamic ? " (dynamic)" : "";
     const type = t.config.type;
-    let info = "";
-
-    if (type === "ssh") {
-      const cfg = t.config as TargetConfig & { type: "ssh" };
-      info = `ssh://${cfg.host}:${cfg.port}`;
-    } else if (type === "docker") {
-      const cfg = t.config as TargetConfig & { type: "docker" };
-      info = `docker://${cfg.container}`;
-    } else {
-      info = type;
-    }
+    const info = type === "ssh"
+      ? `ssh://${(t.config as TargetConfig & { type: "ssh" }).host}:${(t.config as TargetConfig & { type: "ssh" }).port}`
+      : type === "docker"
+        ? `docker://${(t.config as TargetConfig & { type: "docker" }).container}`
+        : type;
 
     lines.push(`  ${t.name}: ${info} → ${t.config.cwd}${dynamic}${active}`);
   }

@@ -34,7 +34,7 @@ export class BashDriver implements ShellDriver {
     if (arg === "") return "''";
 
     // If arg contains no special chars, return as-is (optimization)
-    if (/^[a-zA-Z0-9._\-\/=:@]+$/.test(arg)) return arg;
+    if (/^[a-zA-Z0-9._\-/=:@]+$/.test(arg)) return arg;
 
     // Single-quote with embedded quote escaping
     return "'" + arg.replace(/'/g, "'\"'\"'") + "'";

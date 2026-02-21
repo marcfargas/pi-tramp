@@ -413,8 +413,6 @@ describe("End-to-End", () => {
   describe("binary files", () => {
     it("Docker: round-trips binary content", async () => {
       tm.switchTarget("docker-test");
-      const writeOps = createRemoteWriteOps(pool, tm);
-      const readOps = createRemoteReadOps(pool, tm);
 
       // Write binary content (all byte values 0-255)
       const binary = Buffer.alloc(256);

@@ -29,7 +29,7 @@ export class PwshDriver implements ShellDriver {
 
     // If arg contains no special chars, return as-is (optimization)
     // Note: backslash is safe in PowerShell single quotes (unlike bash)
-    if (/^[a-zA-Z0-9._\-\/\\=:@]+$/.test(arg)) return arg;
+    if (/^[a-zA-Z0-9._\-/\\=:@]+$/.test(arg)) return arg;
 
     // Single-quote with doubled embedded quotes
     return "'" + arg.replace(/'/g, "''") + "'";

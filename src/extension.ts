@@ -101,6 +101,7 @@ export default function (pi: ExtensionAPI) {
     const current = state.targetManager.currentTarget;
     if (!current) return; // No target — use local
 
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { createRemoteBashOps } = require("./operations/remote-ops.js");
     return { operations: createRemoteBashOps(state.pool, state.targetManager) };
   });

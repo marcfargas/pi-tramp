@@ -255,7 +255,7 @@ export class DockerTransport extends EventEmitter implements Transport {
 
       const args = ["exec", "-i", this.container, shellBin, ...shellArgs];
 
-      const proc = execFile("docker", args, {
+      execFile("docker", args, {
         timeout: timeout ?? this.defaultTimeout,
         maxBuffer: 20 * 1024 * 1024, // 20MB (base64 of 10MB + headroom)
         encoding: "buffer",

@@ -11,9 +11,9 @@ import type {
   EditOperations,
   BashOperations,
 } from "@mariozechner/pi-coding-agent";
-import type { ConnectionPool, Transport } from "../types.js";
+import type { ConnectionPool } from "../types.js";
 import { TargetManager } from "../target-manager.js";
-import { resolve, posix } from "path";
+import { posix } from "path";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 

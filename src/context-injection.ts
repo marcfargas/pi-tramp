@@ -80,7 +80,7 @@ export function registerContextInjection(
   // -------------------------------------------------------------------
   // Context injection on target switch: read remote AGENTS.md
   // -------------------------------------------------------------------
-  targetManager.on("target_switched", async ({ from, to }) => {
+  targetManager.on("target_switched", async ({ from: _from, to }) => {
     if (to === "local") {
       // Switching to local — inject a note
       pi.sendMessage({
