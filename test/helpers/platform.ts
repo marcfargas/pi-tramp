@@ -23,6 +23,9 @@ export interface TestPlatform {
   /** Container names */
   dockerContainer: string;
   sshContainer: string;
+  /** SSH ports for Windows two-container setup (cmd default + pwsh default) */
+  sshCmdPort: number;
+  sshPwshPort: number;
   /** Args to keep a docker exec container alive */
   keepaliveArgs: string[];
   /** Extra startup wait (Windows containers are slower) */
@@ -54,6 +57,8 @@ const linuxPlatform: TestPlatform = {
   image: "pi-tramp-ssh-test",
   dockerContainer: "pi-tramp-e2e-docker",
   sshContainer: "pi-tramp-ssh-test",
+  sshCmdPort: 2222,  // not used on Linux, but satisfies the interface
+  sshPwshPort: 2222, // not used on Linux, but satisfies the interface
   keepaliveArgs: ["sleep", "infinity"],
   startupDelayMs: 1000,
 
@@ -86,7 +91,9 @@ const windowsPlatform: TestPlatform = {
   sshHost: "127.0.0.1",
   image: "pi-tramp-win-test",
   dockerContainer: "pi-tramp-e2e-win-docker",
-  sshContainer: "pi-tramp-win-test",
+  sshContainer: "pi-tramp-win-cmd",  // cmd-default container (port 2222), started first
+  sshCmdPort: 2222,  // container with cmd.exe as DefaultShell
+  sshPwshPort: 2223, // container with pwsh as DefaultShell
   keepaliveArgs: [], // Windows CMD loop keeps it alive
   startupDelayMs: 5000,
 

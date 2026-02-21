@@ -114,10 +114,17 @@ describe("End-to-End", () => {
       } as TargetConfig);
     }
 
-    // SSH auto-detect — no shell configured, server default is pwsh (Windows)
+    // SSH auto-detect — Windows: two containers with different DefaultShell settings.
+    // ssh-auto-cmd: cmd.exe default (port sshCmdPort) — expected to reject with clear error.
+    // ssh-auto-pwsh: pwsh default (port sshPwshPort) — expected to auto-detect pwsh.
     if (isWindows) {
+      tm.createTarget("ssh-auto-cmd", {
+        type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`,
+        port: P.sshCmdPort, identityFile: KEY_PATH, cwd: P.workspace,
+      } as TargetConfig);
       tm.createTarget("ssh-auto-pwsh", {
-        type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`, ...SSH_BASE,
+        type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`,
+        port: P.sshPwshPort, identityFile: KEY_PATH, cwd: P.workspace,
       } as TargetConfig);
     }
 
@@ -290,6 +297,16 @@ describe("End-to-End", () => {
   // Shell error tests
   // =========================================================================
   describe("SSH shell errors", () => {
+    // cmd.exe default: Windows container on sshCmdPort.
+    // Auto-detect should detect cmd.exe via polyglot and throw a clear error.
+    it.runIf(isWindows)(
+      "rejects cmd.exe default shell with clear error message",
+      async () => {
+        await expect(pool.getConnection("ssh-auto-cmd"))
+          .rejects.toThrow(/cmd\.exe.*not supported/i);
+      },
+    );
+
     // Noisy default shell: pwsh login shell echoes input + shows prompts.
     // Auto-detect without explicit shell config should error with helpful message.
     // Linux-only: Linux container has a noisy-pwsh-default user for this test.

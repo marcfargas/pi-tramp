@@ -24,7 +24,7 @@ import type {
 import { BashDriver } from "../shell/bash-driver.js";
 import { PwshDriver } from "../shell/pwsh-driver.js";
 import { CommandQueue } from "./command-queue.js";
-import { parsePlatform, parseArch } from "./shell-detect.js";
+import { parsePlatform, parseArch, parseShellPolyglot } from "./shell-detect.js";
 
 // On Windows, use the native SSH binary for access to Windows SSH agent.
 // On Linux/macOS, use system ssh from PATH.
@@ -211,12 +211,17 @@ export class SshTransport extends EventEmitter implements Transport {
       };
       this.currentTimeout = timeout;
 
-      // Send ready probe — dual format for unknown login shells.
+      // Send ready probe — triple format for unknown login shells.
       // One of these will succeed depending on what shell is running.
       // bash/sh: printf works, Write-Output errors to stderr
       // pwsh: Write-Output works, printf may or may not exist
+      // cmd.exe: neither printf nor Write-Output works, but echo is built-in
       this.ssh.stdin!.write(`printf '%s_%d\\n' '${probeSentinel}' 0 2>/dev/null\n`);
       this.ssh.stdin!.write(`Write-Output "${probeSentinel}_0" 2>$null\n`);
+      // Universal fallback — echo is built-in in bash, pwsh, AND cmd.exe.
+      // In bash/pwsh, printf/Write-Output resolves first; currentResolve is null
+      // by the time echo fires, so it is harmlessly ignored.
+      this.ssh.stdin!.write(`echo ${probeSentinel}_0\n`);
     });
   }
 
@@ -309,19 +314,44 @@ export class SshTransport extends EventEmitter implements Transport {
   // --- Shell detection + setup ---
 
   private async detectShellAndSetup(): Promise<void> {
-    // Detect the shell via marker probe.
-    const marker = `PITRAMP_PWSH_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-    try {
-      const result = await this.execRawDual(
-        `Write-Output "${marker}"`,
-        5000,
+    // Phase 1: Use polyglot to detect cmd.exe vs PowerShell Core/Desktop vs bash.
+    // Source: https://stackoverflow.com/a/61469226 (CC BY-SA 4.0)
+    // Returns: "CMD" (cmd.exe), "Core" (pwsh 7), "Desktop" (Windows PowerShell 5.1)
+    // In bash, this produces a syntax error — no recognizable output → "unknown".
+    const polyglotResult = await this.execRawDual(
+      "(dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition",
+      5000,
+    );
+    const shellType = parseShellPolyglot(polyglotResult.stdout);
+
+    if (shellType === "cmd") {
+      throw new Error(
+        `Default SSH shell is cmd.exe, which is not supported.\n` +
+        `Fix: set "shell" in your target config:\n` +
+        `  { "shell": "pwsh" }   — for PowerShell 7\n` +
+        `  { "shell": "bash" }   — for Git Bash / WSL`,
       );
-      if (result.stdout.includes(marker)) {
-        this._shell = "pwsh";
-      }
-    } catch {
-      // Not pwsh or timeout
     }
+
+    if (shellType === "pwsh") {
+      this._shell = "pwsh";
+    }
+
+    // Phase 2: If not detected as PowerShell, try bash by checking $BASH_VERSION.
+    if (this._shell === "unknown") {
+      try {
+        const bashResult = await this.execRawDual("echo $BASH_VERSION", 5000);
+        const version = bashResult.stdout.trim();
+        if (version && !version.includes("$BASH_VERSION")) {
+          // $BASH_VERSION expanded → we're in bash
+          this._shell = "bash";
+        }
+      } catch {
+        // Not bash
+      }
+    }
+
+    // Phase 3: If still unknown, default to bash (existing behaviour).
     if (this._shell === "unknown") {
       this._shell = "bash";
     }
@@ -521,12 +551,14 @@ export class SshTransport extends EventEmitter implements Transport {
         try { this.ssh?.stdin?.write("\x03\n"); } catch { /* ignore */ }
       }, timeoutMs);
 
-      // Send command + both sentinel formats
+      // Send command + triple sentinel formats
       // pwsh: $LASTEXITCODE is $null until an external program runs.
       // Use `-as [int]` to coerce $null → 0 so the sentinel always has digits.
+      // cmd.exe: neither printf nor Write-Output works; echo fires as fallback.
       const bashSentinel = `printf '%s_%d\\n' '${sentinel}' $? 2>/dev/null`;
       const pwshSentinel = `Write-Output "${sentinel}_$(${ESC_LASTEXITCODE})" 2>$null`;
-      this.ssh.stdin!.write(`${command}\n${bashSentinel}\n${pwshSentinel}\n`);
+      const echoSentinel = `echo ${sentinel}_0`;  // universal fallback for cmd.exe
+      this.ssh.stdin!.write(`${command}\n${bashSentinel}\n${pwshSentinel}\n${echoSentinel}\n`);
     });
   }
 
