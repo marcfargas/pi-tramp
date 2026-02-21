@@ -139,7 +139,7 @@ describe("End-to-End", () => {
   }, 60000);
 
   afterAll(async () => {
-    await pool.closeAll();
+    await pool?.closeAll();
     try { await execFileAsync("docker", ["rm", "-f", P.dockerContainer]); } catch { /* */ }
   });
 

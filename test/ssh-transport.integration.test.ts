@@ -59,7 +59,7 @@ describe.skipIf(isWindows)("SshTransport", () => {
   }, 30000);
 
   afterAll(async () => {
-    await transport.close();
+    await transport?.close();
   });
 
   describe("connection", () => {

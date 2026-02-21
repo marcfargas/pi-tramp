@@ -57,7 +57,7 @@ describe.skipIf(isWindows)("Remote Operations", () => {
   }, 30000);
 
   afterAll(async () => {
-    await pool.closeAll();
+    await pool?.closeAll();
     try { await execFileAsync("docker", ["rm", "-f", CONTAINER]); } catch { /* */ }
   });
 

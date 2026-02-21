@@ -129,7 +129,7 @@ export interface ShellDriver {
 // Target config (Zod schemas)
 // ---------------------------------------------------------------------------
 
-export const ShellTypeSchema = z.enum(["bash", "pwsh", "sh", "cmd"]);
+export const ShellTypeSchema = z.enum(["bash", "pwsh", "sh"]);
 
 const SshTargetConfigSchema = z.object({
   type: z.literal("ssh"),

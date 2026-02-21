@@ -83,7 +83,7 @@ export function createRemoteReadOps(
         const result = await transport.exec(cmd);
         const stat = result.stdout.trim();
 
-        if (stat === "missing") {
+        if (result.exitCode !== 0 || stat === "missing" || stat === "") {
           throw new Error(`File not found: ${remotePath}`);
         }
       });

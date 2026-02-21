@@ -55,7 +55,7 @@ describe.skipIf(isWindows)("DockerTransport (pwsh)", () => {
   }, 30000);
 
   afterAll(async () => {
-    await transport.close();
+    await transport?.close();
     try { await execFileAsync("docker", ["rm", "-f", DOCKER_CONTAINER]); } catch { /* */ }
   });
 
@@ -154,7 +154,7 @@ describe.skipIf(isWindows)("SshTransport (pwsh)", () => {
   }, 30000);
 
   afterAll(async () => {
-    await transport.close();
+    await transport?.close();
   });
 
   it("detects pwsh shell", () => {

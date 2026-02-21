@@ -51,10 +51,8 @@ describe.skipIf(isWindows)("DockerTransport", () => {
   }, 30000);
 
   afterAll(async () => {
-    await transport.close();
-    try {
-      await execFileAsync("docker", ["rm", "-f", CONTAINER]);
-    } catch { /* ignore */ }
+    await transport?.close();
+    try { await execFileAsync("docker", ["rm", "-f", CONTAINER]); } catch { /* ignore */ }
   });
 
   describe("connection", () => {
