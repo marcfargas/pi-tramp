@@ -292,6 +292,11 @@ export class SshTransport extends EventEmitter implements Transport {
           this.sentinelRegex = null;
           this.outputChunks = [];
 
+          // NOTE: stderr is always empty here. The SSH transport runs commands
+          // through a single PTY stream where stdout and stderr are multiplexed
+          // into one channel — there is no separate stderr fd. Capturing stderr
+          // separately would require command wrapping (e.g. `cmd 2>/tmp/e; ...`)
+          // which is a larger architectural change. Known limitation.
           resolve?.({ stdout, stderr: "", exitCode });
           return;
         }

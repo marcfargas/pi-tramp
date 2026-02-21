@@ -9,7 +9,6 @@
  *   SSH × auto-detect (pwsh)             — no shell config, default is pwsh
  *   SSH × explicit bash                  — shell: "bash", default is bash (Linux only)
  *   SSH × explicit pwsh                  — shell: "pwsh", default is pwsh
- *   SSH × mismatch                       — shell: "X" but default is "Y" → error
  *
  * Platform-aware: set PI_TRAMP_TARGET_OS=windows for Windows containers.
  * Default: Linux containers.

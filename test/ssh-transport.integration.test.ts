@@ -142,6 +142,16 @@ describe.skipIf(isWindows)("SshTransport", () => {
       expect(result.stdout.trim()).toContain("$world");
       expect(result.stdout.trim()).toContain('"quotes"');
     });
+
+    it("known limitation: stderr is not captured separately", async () => {
+      // SSH transport uses a single PTY — stdout and stderr are multiplexed.
+      // stderr is always empty string. This is a known limitation.
+      const result = await transport.exec("echo out && echo err >&2");
+      expect(result.stderr).toBe(""); // Known limitation
+      // stderr content appears in stdout instead (PTY multiplexing)
+      expect(result.stdout).toContain("out");
+      expect(result.stdout).toContain("err");
+    });
   });
 
   describe("file operations", () => {

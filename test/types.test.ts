@@ -92,6 +92,15 @@ describe("TargetConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects cmd shell (no driver implemented)", () => {
+    const result = TargetConfigSchema.safeParse({
+      type: "ssh",
+      host: "user@host",
+      shell: "cmd",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects timeout < 1000ms", () => {
     const result = TargetConfigSchema.safeParse({
       type: "ssh",

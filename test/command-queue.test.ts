@@ -24,6 +24,25 @@ describe("CommandQueue", () => {
     expect(order).toEqual([1, 2, 3]); // strictly sequential
   });
 
+  it("serializes concurrent tasks (no overlap)", async () => {
+    const queue = new CommandQueue();
+    const timeline: Array<{ id: number; start: number; end: number }> = [];
+    const results = await Promise.all([1, 2, 3].map((id) =>
+      queue.enqueue(async () => {
+        const start = Date.now();
+        await new Promise((r) => setTimeout(r, 50)); // 50ms work
+        const end = Date.now();
+        timeline.push({ id, start, end });
+        return id;
+      })
+    ));
+    expect(results).toEqual([1, 2, 3]);
+    // Verify non-overlap: each task starts after previous ends
+    for (let i = 1; i < timeline.length; i++) {
+      expect(timeline[i].start).toBeGreaterThanOrEqual(timeline[i - 1].end);
+    }
+  });
+
   it("propagates errors without breaking the queue", async () => {
     const queue = new CommandQueue();
 
