@@ -1,6 +1,6 @@
 {
   "name": "@marcfargas/pi-tramp",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.0",
   "description": "TRAMP-like transparent remote execution for pi — tools execute remotely, pi stays local",
   "author": "Marc Fargas",
   "license": "MIT",
