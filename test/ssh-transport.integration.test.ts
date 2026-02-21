@@ -16,7 +16,7 @@ import { join } from "path";
 const execFileAsync = promisify(execFile);
 
 const CONTAINER = "pi-tramp-ssh-test";
-const TEMP = process.env.TEMP || process.env.TMP || "C:\\Users\\marc\\AppData\\Local\\Temp";
+const TEMP = process.env.TEMP || process.env.TMP || "/tmp";
 const KEY_PATH = join(TEMP, "pi-tramp-test-key");
 
 let transport: SshTransport;
@@ -36,12 +36,14 @@ describe("SshTransport", () => {
     // Wait for sshd to start
     await new Promise((r) => setTimeout(r, 1000));
 
-    // Extract the key
+    // Extract the key and fix permissions (Windows docker cp creates broad ACLs)
     await execFileAsync("docker", ["cp", `${CONTAINER}:/test_key`, KEY_PATH]);
+    const { fixKeyPermissions } = await import("./helpers/platform.js");
+    await fixKeyPermissions(KEY_PATH);
 
     transport = new SshTransport({
       type: "ssh",
-      host: "testuser@localhost",
+      host: "testuser@127.0.0.1",
       port: 2222,
       identityFile: KEY_PATH,
       cwd: "/workspace",

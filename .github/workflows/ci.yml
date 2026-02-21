@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,10 +24,12 @@ jobs:
       - run: npm run typecheck
 
   test:
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node-version: [20, 22, 24]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -37,7 +39,11 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  test-integration:
+  # ---------------------------------------------------------------------------
+  # Integration tests — Linux containers (ubuntu runner)
+  # Tests: Docker×bash, Docker×pwsh, SSH×bash, SSH×pwsh against Linux container
+  # ---------------------------------------------------------------------------
+  test-integration-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -47,10 +53,10 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Build SSH test container
+      - name: Build Linux test container
         run: docker build -t pi-tramp-ssh-test test/fixtures/ssh-server/
 
-      - name: Start SSH test container
+      - name: Start SSH container
         run: docker run -d --name pi-tramp-ssh-test -p 2222:22 pi-tramp-ssh-test
 
       - name: Wait for SSH
@@ -65,7 +71,50 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: docker rm -f pi-tramp-ssh-test || true
+        run: docker rm -f pi-tramp-ssh-test pi-tramp-e2e-docker 2>/dev/null || true
+
+  # ---------------------------------------------------------------------------
+  # Integration tests — Windows containers (windows runner)
+  # Tests: Docker×bash, Docker×pwsh, SSH×bash, SSH×pwsh against Windows container
+  # ---------------------------------------------------------------------------
+  test-integration-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build Windows test container
+        run: docker build -t pi-tramp-win-test test/fixtures/windows-ssh-server/
+
+      - name: Start SSH container
+        run: docker run -d --name pi-tramp-win-test -p 2222:22 pi-tramp-win-test
+
+      - name: Wait for SSH
+        shell: pwsh
+        run: |
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $null = Test-NetConnection -ComputerName localhost -Port 2222 -ErrorAction Stop
+              Write-Host "SSH ready"
+              break
+            } catch { Start-Sleep 2 }
+          }
+
+      - name: Run integration tests
+        env:
+          PI_TRAMP_TARGET_OS: windows
+        run: npm run test:integration
+
+      - name: Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          docker rm -f pi-tramp-win-test 2>$null
+          docker rm -f pi-tramp-e2e-win-docker 2>$null
 
   audit:
     runs-on: ubuntu-latest

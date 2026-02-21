@@ -2,10 +2,10 @@
  * End-to-end integration tests.
  *
  * Tests the full stack: TargetManager → ConnectionPool → Transport → Operations.
- * Covers all 4 tool operations × both transports (Docker + SSH).
+ * Runs all 4 scenarios: Docker×bash, Docker×pwsh, SSH×bash, SSH×pwsh.
  *
- * Requires:
- *   docker run -d --name pi-tramp-ssh-test -p 2222:22 pi-tramp-ssh-test
+ * Platform-aware: set PI_TRAMP_TARGET_OS=windows for Windows containers.
+ * Default: Linux containers.
  *
  * Run: npm run test:integration
  */
@@ -25,537 +25,306 @@ import {
 import { createEditTool } from "@mariozechner/pi-coding-agent";
 import { initTrampExec, trampExec } from "../src/tramp-exec.js";
 import type { TargetConfig } from "../src/types.js";
+type TestShell = "bash" | "pwsh";
+import { getTestPlatform, fixKeyPermissions } from "./helpers/platform.js";
 
 const execFileAsync = promisify(execFile);
 const TEMP = process.env.TEMP || process.env.TMP || "/tmp";
 const KEY_PATH = join(TEMP, "pi-tramp-test-key");
-
-const DOCKER_CONTAINER = "pi-tramp-e2e-docker";
-const SSH_CONTAINER = "pi-tramp-ssh-test";
-const IMAGE = "pi-tramp-ssh-test";
+const P = getTestPlatform();
 
 // Shared state
 let tm: TargetManager;
 let pool: ConnectionPool;
 
+// The 4 scenarios: transport × shell
+const scenarios: Array<{
+  name: string;
+  targetName: string;
+  transport: "docker" | "ssh";
+  shell: TestShell;
+}> = [
+  { name: "Docker × bash", targetName: "docker-bash", transport: "docker", shell: "bash" },
+  { name: "Docker × pwsh", targetName: "docker-pwsh", transport: "docker", shell: "pwsh" },
+  { name: "SSH × bash", targetName: "ssh-bash", transport: "ssh", shell: "bash" },
+  { name: "SSH × pwsh", targetName: "ssh-pwsh", transport: "ssh", shell: "pwsh" },
+];
+
 describe("End-to-End", () => {
   beforeAll(async () => {
-    // Start Docker container for docker transport tests
-    try { await execFileAsync("docker", ["rm", "-f", DOCKER_CONTAINER]); } catch { /* */ }
-    await execFileAsync("docker", ["run", "-d", "--name", DOCKER_CONTAINER, IMAGE, "sleep", "infinity"]);
+    // Start Docker containers
+    try { await execFileAsync("docker", ["rm", "-f", P.dockerContainer]); } catch { /* */ }
+    await execFileAsync("docker", ["run", "-d", "--name", P.dockerContainer, P.image, ...P.keepaliveArgs]);
 
-    // Ensure SSH container is running
-    try { await execFileAsync("docker", ["start", SSH_CONTAINER]); } catch {
-      await execFileAsync("docker", ["run", "-d", "--name", SSH_CONTAINER, "-p", "2222:22", IMAGE]);
+    try { await execFileAsync("docker", ["start", P.sshContainer]); } catch {
+      await execFileAsync("docker", ["run", "-d", "--name", P.sshContainer, "-p", "2222:22", P.image]);
     }
 
-    // Extract SSH key
-    await execFileAsync("docker", ["cp", `${SSH_CONTAINER}:/test_key`, KEY_PATH]);
-    await new Promise((r) => setTimeout(r, 1000));
+    // Extract SSH key and fix permissions (Windows docker cp creates broad ACLs)
+    await execFileAsync("docker", ["cp", `${P.sshContainer}:${P.testKeyPath}`, KEY_PATH]);
+    await fixKeyPermissions(KEY_PATH);
+    await new Promise((r) => setTimeout(r, P.startupDelayMs));
 
-    // Setup TargetManager with both targets
+    // Create targets for all 4 scenarios
     tm = new TargetManager();
-    tm.createTarget("docker-test", {
-      type: "docker",
-      container: DOCKER_CONTAINER,
-      cwd: "/workspace",
+
+    tm.createTarget("docker-bash", {
+      type: "docker", container: P.dockerContainer, cwd: P.workspace, shell: "bash",
     } as TargetConfig);
-    tm.createTarget("ssh-test", {
-      type: "ssh",
-      host: "testuser@localhost",
-      port: 2222,
-      identityFile: KEY_PATH,
-      cwd: "/workspace",
+    tm.createTarget("docker-pwsh", {
+      type: "docker", container: P.dockerContainer, cwd: P.workspace, shell: "pwsh",
+    } as TargetConfig);
+    tm.createTarget("ssh-bash", {
+      type: "ssh", host: `${P.sshUser}@${P.sshHost}`, port: 2222,
+      identityFile: KEY_PATH, cwd: P.workspace, shell: "bash",
+    } as TargetConfig);
+    tm.createTarget("ssh-pwsh", {
+      type: "ssh", host: `${P.sshUser}@${P.sshHost}`, port: 2222,
+      identityFile: KEY_PATH, cwd: P.workspace, shell: "pwsh",
     } as TargetConfig);
 
     pool = new ConnectionPool(tm);
     initTrampExec(pool, tm);
-  }, 30000);
+  }, 60000);
 
   afterAll(async () => {
     await pool.closeAll();
-    try { await execFileAsync("docker", ["rm", "-f", DOCKER_CONTAINER]); } catch { /* */ }
+    try { await execFileAsync("docker", ["rm", "-f", P.dockerContainer]); } catch { /* */ }
   });
 
   // =========================================================================
-  // Docker Transport E2E
+  // Run the same tests for each transport × shell scenario
   // =========================================================================
-  describe("Docker target", () => {
-    beforeAll(() => { tm.switchTarget("docker-test"); });
+  for (const s of scenarios) {
+    describe(s.name, () => {
+      beforeAll(() => { tm.switchTarget(s.targetName); });
 
-    describe("read operations", () => {
-      it("reads an existing file", async () => {
-        const ops = createRemoteReadOps(pool, tm);
-        const data = await ops.readFile("/workspace/test.txt");
-        expect(data.toString("utf8").trim()).toBe("hello world");
-      });
-
-      it("access checks succeed for existing files", async () => {
-        const ops = createRemoteReadOps(pool, tm);
-        await ops.access("/workspace/test.txt"); // should not throw
-      });
-
-      it("access checks fail for missing files", async () => {
-        const ops = createRemoteReadOps(pool, tm);
-        await expect(ops.access("/workspace/nope.txt")).rejects.toThrow();
-      });
-    });
-
-    describe("write operations", () => {
-      it("writes a new file", async () => {
-        const ops = createRemoteWriteOps(pool, tm);
-        await ops.writeFile("/workspace/e2e-docker-write.txt", "e2e docker write\n");
-
-        const readOps = createRemoteReadOps(pool, tm);
-        const data = await readOps.readFile("/workspace/e2e-docker-write.txt");
-        expect(data.toString("utf8")).toBe("e2e docker write\n");
-
-        // Cleanup
-        const transport = await pool.getConnection("docker-test");
-        await transport.exec("rm /workspace/e2e-docker-write.txt");
-      });
-
-      it("creates parent directories", async () => {
-        const ops = createRemoteWriteOps(pool, tm);
-        await ops.mkdir("/workspace/e2e-docker-deep/sub/dir");
-
-        const transport = await pool.getConnection("docker-test");
-        const result = await transport.exec("test -d /workspace/e2e-docker-deep/sub/dir && echo ok");
-        expect(result.stdout.trim()).toBe("ok");
-
-        await transport.exec("rm -rf /workspace/e2e-docker-deep");
-      });
-    });
-
-    describe("edit operations (read-apply-write)", () => {
-      it("simulates a full edit cycle", async () => {
-        const ops = createRemoteEditOps(pool, tm);
-
-        // Write initial file
-        await ops.writeFile("/workspace/e2e-docker-edit.txt", "line1\nline2\nline3\n");
-
-        // Verify access
-        await ops.access("/workspace/e2e-docker-edit.txt");
-
-        // Read
-        const content = await ops.readFile("/workspace/e2e-docker-edit.txt");
-        expect(content.toString("utf8")).toBe("line1\nline2\nline3\n");
-
-        // Apply edit (in reality pi does this)
-        const modified = content.toString("utf8").replace("line2", "EDITED");
-        await ops.writeFile("/workspace/e2e-docker-edit.txt", modified);
-
-        // Verify
-        const final = await ops.readFile("/workspace/e2e-docker-edit.txt");
-        expect(final.toString("utf8")).toBe("line1\nEDITED\nline3\n");
-
-        // Cleanup
-        const transport = await pool.getConnection("docker-test");
-        await transport.exec("rm /workspace/e2e-docker-edit.txt");
-      });
-    });
-
-    describe("bash operations", () => {
-      it("executes a command and streams output", async () => {
-        const ops = createRemoteBashOps(pool, tm);
-        const chunks: Buffer[] = [];
-        const result = await ops.exec("echo 'docker e2e bash'", "/workspace", {
-          onData: (data) => chunks.push(data),
+      // -----------------------------------------------------------------------
+      // Read operations
+      // -----------------------------------------------------------------------
+      describe("read", () => {
+        it("reads an existing file", async () => {
+          const ops = createRemoteReadOps(pool, tm);
+          const data = await ops.readFile(P.join(P.workspace, "test.txt"));
+          expect(data.toString("utf8").trim()).toBe("hello world");
         });
-        expect(result.exitCode).toBe(0);
-        expect(Buffer.concat(chunks).toString("utf8")).toContain("docker e2e bash");
+
+        it("access succeeds for existing file", async () => {
+          const ops = createRemoteReadOps(pool, tm);
+          await ops.access(P.join(P.workspace, "test.txt"));
+        });
+
+        it("access fails for missing file", async () => {
+          const ops = createRemoteReadOps(pool, tm);
+          await expect(ops.access(P.join(P.workspace, "nope.txt"))).rejects.toThrow();
+        });
       });
 
-      it("runs in target cwd", async () => {
-        const ops = createRemoteBashOps(pool, tm);
-        const chunks: Buffer[] = [];
-        await ops.exec("pwd", "/workspace", {
-          onData: (data) => chunks.push(data),
+      // -----------------------------------------------------------------------
+      // Write operations
+      // -----------------------------------------------------------------------
+      describe("write", () => {
+        it("writes and reads back a file", async () => {
+          const fname = `e2e-write-${s.targetName}.txt`;
+          const fpath = P.join(P.workspace, fname);
+          const writeOps = createRemoteWriteOps(pool, tm);
+          const readOps = createRemoteReadOps(pool, tm);
+
+          await writeOps.writeFile(fpath, `write test ${s.name}\n`);
+          const data = await readOps.readFile(fpath);
+          expect(data.toString("utf8")).toBe(`write test ${s.name}\n`);
+
+          // Cleanup
+          const transport = await pool.getConnection(s.targetName);
+          await transport.exec(P.rmFile(fpath, s.shell));
         });
-        expect(Buffer.concat(chunks).toString("utf8").trim()).toBe("/workspace");
+
+        it("creates directories", async () => {
+          const dir = P.join(P.workspace, `e2e-dir-${s.targetName}`, "sub", "deep");
+          const writeOps = createRemoteWriteOps(pool, tm);
+          await writeOps.mkdir(dir);
+
+          const transport = await pool.getConnection(s.targetName);
+          const result = await transport.exec(P.testDir(dir, s.shell));
+          expect(result.stdout.trim()).toBe("ok");
+
+          // Cleanup parent
+          await transport.exec(P.rmDir(P.join(P.workspace, `e2e-dir-${s.targetName}`), s.shell));
+        });
       });
 
-      it("captures non-zero exit codes", async () => {
-        const ops = createRemoteBashOps(pool, tm);
-        const result = await ops.exec("exit 42", "/workspace", {
-          onData: () => {},
+      // -----------------------------------------------------------------------
+      // Edit operations (via pi's createEditTool)
+      // -----------------------------------------------------------------------
+      describe("edit", () => {
+        it("edit cycle with LF content", async () => {
+          const fname = `e2e-edit-${s.targetName}.txt`;
+          const fpath = P.join(P.workspace, fname);
+          const writeOps = createRemoteWriteOps(pool, tm);
+          const readOps = createRemoteReadOps(pool, tm);
+
+          await writeOps.writeFile(fpath, "line1\nline2\nline3\n");
+          const content = await readOps.readFile(fpath);
+          const modified = content.toString("utf8").replace("line2", "MODIFIED");
+          await writeOps.writeFile(fpath, modified);
+
+          const final = await readOps.readFile(fpath);
+          expect(final.toString("utf8")).toContain("MODIFIED");
+
+          const transport = await pool.getConnection(s.targetName);
+          await transport.exec(P.rmFile(fpath, s.shell));
         });
-        expect(result.exitCode).toBe(42);
+
+        it("CRLF edit preserves line endings", async () => {
+          const fname = `e2e-crlf-${s.targetName}.txt`;
+          const fpath = P.join(P.workspace, fname);
+          const transport = await pool.getConnection(s.targetName);
+          const crlfContent = "alpha\r\nbeta\r\ngamma\r\n";
+          await transport.writeFile(fpath, Buffer.from(crlfContent, "utf8"));
+
+          const editOps = createRemoteEditOps(pool, tm);
+          const tool = createEditTool(P.workspace, { operations: editOps });
+          const result = await tool.execute("test-id", {
+            path: fpath,
+            oldText: "beta",    // LF-only (as LLM sends)
+            newText: "CHANGED",
+          });
+
+          expect((result.content[0] as { text: string }).text).toContain("Successfully");
+          const final = await transport.readFile(fpath);
+          expect(final.toString("utf8")).toBe("alpha\r\nCHANGED\r\ngamma\r\n");
+
+          await transport.exec(P.rmFile(fpath, s.shell));
+        });
+      });
+
+      // -----------------------------------------------------------------------
+      // Bash (exec) operations
+      // -----------------------------------------------------------------------
+      describe("exec", () => {
+        it("runs a command and captures output", async () => {
+          const ops = createRemoteBashOps(pool, tm);
+          const chunks: Buffer[] = [];
+          await ops.exec(P.echoCmd(`exec-test-${s.name}`, s.shell), P.workspace, {
+            onData: (d) => chunks.push(d),
+          });
+          expect(Buffer.concat(chunks).toString("utf8")).toContain(`exec-test-${s.name}`);
+        });
+
+        it("reports cwd", async () => {
+          const ops = createRemoteBashOps(pool, tm);
+          const chunks: Buffer[] = [];
+          await ops.exec(P.pwdCmd(s.shell), P.workspace, {
+            onData: (d) => chunks.push(d),
+          });
+          const output = Buffer.concat(chunks).toString("utf8").trim();
+          // Normalize for comparison: bash on Windows returns MSYS paths (/c/workspace)
+          // pwsh returns Windows paths (C:\workspace). Normalize both to lowercase forward-slash.
+          const normalize = (p: string) =>
+            p.replace(/\\/g, "/").replace(/^\/([a-zA-Z])\//, (_, d: string) => `${d.toUpperCase()}:/`).toLowerCase();
+          expect(normalize(output)).toBe(normalize(P.workspace));
+        });
+
+        it("captures non-zero exit code", async () => {
+          const ops = createRemoteBashOps(pool, tm);
+          const result = await ops.exec(P.exitCmd(42, s.shell, s.transport), P.workspace, {
+            onData: () => {},
+          });
+          expect(result.exitCode).toBe(42);
+        });
       });
     });
-  });
-
-  // =========================================================================
-  // SSH Transport E2E
-  // =========================================================================
-  describe("SSH target", () => {
-    beforeAll(() => { tm.switchTarget("ssh-test"); });
-
-    describe("read operations", () => {
-      it("reads an existing file", async () => {
-        const ops = createRemoteReadOps(pool, tm);
-        const data = await ops.readFile("/workspace/test.txt");
-        expect(data.toString("utf8").trim()).toBe("hello world");
-      });
-
-      it("access checks succeed for existing files", async () => {
-        const ops = createRemoteReadOps(pool, tm);
-        await ops.access("/workspace/test.txt");
-      });
-
-      it("access checks fail for missing files", async () => {
-        const ops = createRemoteReadOps(pool, tm);
-        await expect(ops.access("/workspace/nope.txt")).rejects.toThrow();
-      });
-    });
-
-    describe("write operations", () => {
-      it("writes a new file", async () => {
-        const ops = createRemoteWriteOps(pool, tm);
-        await ops.writeFile("/workspace/e2e-ssh-write.txt", "e2e ssh write\n");
-
-        const readOps = createRemoteReadOps(pool, tm);
-        const data = await readOps.readFile("/workspace/e2e-ssh-write.txt");
-        expect(data.toString("utf8")).toBe("e2e ssh write\n");
-
-        const transport = await pool.getConnection("ssh-test");
-        await transport.exec("rm /workspace/e2e-ssh-write.txt");
-      });
-
-      it("creates parent directories", async () => {
-        const ops = createRemoteWriteOps(pool, tm);
-        await ops.mkdir("/workspace/e2e-ssh-deep/sub/dir");
-
-        const transport = await pool.getConnection("ssh-test");
-        const result = await transport.exec("test -d /workspace/e2e-ssh-deep/sub/dir && echo ok");
-        expect(result.stdout.trim()).toBe("ok");
-
-        await transport.exec("rm -rf /workspace/e2e-ssh-deep");
-      });
-    });
-
-    describe("edit operations (read-apply-write)", () => {
-      it("simulates a full edit cycle", async () => {
-        const ops = createRemoteEditOps(pool, tm);
-
-        await ops.writeFile("/workspace/e2e-ssh-edit.txt", "alpha\nbeta\ngamma\n");
-        await ops.access("/workspace/e2e-ssh-edit.txt");
-
-        const content = await ops.readFile("/workspace/e2e-ssh-edit.txt");
-        expect(content.toString("utf8")).toBe("alpha\nbeta\ngamma\n");
-
-        const modified = content.toString("utf8").replace("beta", "REPLACED");
-        await ops.writeFile("/workspace/e2e-ssh-edit.txt", modified);
-
-        const final = await ops.readFile("/workspace/e2e-ssh-edit.txt");
-        expect(final.toString("utf8")).toBe("alpha\nREPLACED\ngamma\n");
-
-        const transport = await pool.getConnection("ssh-test");
-        await transport.exec("rm /workspace/e2e-ssh-edit.txt");
-      });
-    });
-
-    describe("bash operations", () => {
-      it("executes a command and streams output", async () => {
-        const ops = createRemoteBashOps(pool, tm);
-        const chunks: Buffer[] = [];
-        const result = await ops.exec("echo 'ssh e2e bash'", "/workspace", {
-          onData: (data) => chunks.push(data),
-        });
-        expect(result.exitCode).toBe(0);
-        expect(Buffer.concat(chunks).toString("utf8")).toContain("ssh e2e bash");
-      });
-
-      it("runs in target cwd", async () => {
-        const ops = createRemoteBashOps(pool, tm);
-        const chunks: Buffer[] = [];
-        await ops.exec("pwd", "/workspace", {
-          onData: (data) => chunks.push(data),
-        });
-        expect(Buffer.concat(chunks).toString("utf8").trim()).toBe("/workspace");
-      });
-
-      it("captures non-zero exit codes", async () => {
-        const ops = createRemoteBashOps(pool, tm);
-        // Use subshell to avoid killing the persistent SSH session
-        const result = await ops.exec("(exit 7)", "/workspace", {
-          onData: () => {},
-        });
-        expect(result.exitCode).toBe(7);
-      });
-
-      it("handles commands with special characters", async () => {
-        const ops = createRemoteBashOps(pool, tm);
-        const chunks: Buffer[] = [];
-        await ops.exec("echo 'hello $USER \"quotes\" `backticks`'", "/workspace", {
-          onData: (data) => chunks.push(data),
-        });
-        const out = Buffer.concat(chunks).toString("utf8");
-        expect(out).toContain("$USER");
-        expect(out).toContain('"quotes"');
-      });
-    });
-  });
+  }
 
   // =========================================================================
-  // Target Switching
+  // Cross-scenario tests (not per-scenario)
   // =========================================================================
+
   describe("target switching", () => {
-    it("switches between docker and ssh targets", async () => {
-      // Start on docker
-      tm.switchTarget("docker-test");
-      let ops = createRemoteBashOps(pool, tm);
-      let chunks: Buffer[] = [];
-      await ops.exec("hostname", "/workspace", {
-        onData: (data) => chunks.push(data),
-      });
-      const dockerHostname = Buffer.concat(chunks).toString("utf8").trim();
+    it("emits events on switch", () => {
+      const events: Array<{ from?: string; to: string }> = [];
+      tm.on("target_switched", (e: { from?: string; to: string }) => events.push(e));
 
-      // Switch to ssh
-      tm.switchTarget("ssh-test");
-      ops = createRemoteBashOps(pool, tm);
-      chunks = [];
-      await ops.exec("hostname", "/workspace", {
-        onData: (data) => chunks.push(data),
-      });
-      const sshHostname = Buffer.concat(chunks).toString("utf8").trim();
-
-      // Both should return hostnames (might be the same since same image, but test works)
-      expect(dockerHostname).toBeTruthy();
-      expect(sshHostname).toBeTruthy();
-    });
-
-    it("switching to local means no active target", () => {
-      tm.switchTarget("docker-test");
-      expect(tm.currentTarget).not.toBeNull();
-
-      tm.switchTarget("local");
-      expect(tm.currentTarget).toBeNull();
-    });
-
-    it("emits target_switched event", async () => {
-      const events: Array<{ from: string | null; to: string }> = [];
-      tm.on("target_switched", (ev) => events.push(ev));
-
-      tm.switchTarget("docker-test");
-      tm.switchTarget("ssh-test");
+      tm.switchTarget("docker-bash");
+      tm.switchTarget("ssh-pwsh");
       tm.switchTarget("local");
 
       expect(events).toHaveLength(3);
-      expect(events[0].to).toBe("docker-test");
-      expect(events[1].from).toBe("docker-test");
-      expect(events[1].to).toBe("ssh-test");
+      expect(events[0].to).toBe("docker-bash");
+      expect(events[1].from).toBe("docker-bash");
+      expect(events[1].to).toBe("ssh-pwsh");
       expect(events[2].to).toBe("local");
 
       tm.removeAllListeners("target_switched");
     });
   });
 
-  // =========================================================================
-  // trampExec Public API
-  // =========================================================================
   describe("trampExec", () => {
     it("executes on current target", async () => {
-      tm.switchTarget("docker-test");
+      tm.switchTarget("docker-bash");
       const result = await trampExec("echo trampExec-test");
       expect(result.stdout.trim()).toBe("trampExec-test");
       expect(result.exitCode).toBe(0);
     });
 
     it("executes on a specific target", async () => {
-      tm.switchTarget("local"); // No active target
-      const result = await trampExec("echo specific", { target: "ssh-test" });
+      tm.switchTarget("local");
+      const result = await trampExec("echo specific", { target: "ssh-bash" });
       expect(result.stdout.trim()).toBe("specific");
     });
 
-    it("throws when no target is active or specified", async () => {
+    it("throws when no target active", async () => {
       tm.switchTarget("local");
       await expect(trampExec("echo nope")).rejects.toThrow("No active target");
     });
   });
 
-  // =========================================================================
-  // Connection Pool behavior
-  // =========================================================================
   describe("connection pool", () => {
-    it("reuses connections across operations", async () => {
-      tm.switchTarget("docker-test");
-
-      // Multiple operations should reuse the same transport
-      const t1 = await pool.getConnection("docker-test");
-      const t2 = await pool.getConnection("docker-test");
-      expect(t1).toBe(t2); // Same object reference
+    it("reuses connections", async () => {
+      const t1 = await pool.getConnection("docker-bash");
+      const t2 = await pool.getConnection("docker-bash");
+      expect(t1).toBe(t2);
     });
 
-    it("reports status for connected targets", async () => {
-      await pool.getConnection("docker-test");
+    it("reports status", async () => {
+      await pool.getConnection("docker-bash");
       const status = pool.getStatus();
-      const dockerStatus = status.get("docker-test");
-      expect(dockerStatus).toBeDefined();
-      expect(dockerStatus!.state).toBe("connected");
-      expect(dockerStatus!.shell).toBeTruthy();
-      expect(dockerStatus!.platform).toBe("linux");
+      const s = status.get("docker-bash");
+      expect(s).toBeDefined();
+      expect(s!.state).toBe("connected");
     });
 
     it("closes and reconnects", async () => {
-      await pool.closeConnection("docker-test");
-      const status = pool.getStatus();
-      expect(status.has("docker-test")).toBe(false);
-
-      // Should reconnect on next use
-      const transport = await pool.getConnection("docker-test");
-      expect(transport.state).toBe("connected");
+      await pool.closeConnection("docker-bash");
+      expect(pool.getStatus().has("docker-bash")).toBe(false);
+      const t = await pool.getConnection("docker-bash");
+      expect(t.state).toBe("connected");
     });
   });
 
-  // =========================================================================
-  // Binary file handling
-  // =========================================================================
   describe("binary files", () => {
-    it("Docker: round-trips binary content", async () => {
-      tm.switchTarget("docker-test");
-
-      // Write binary content (all byte values 0-255)
+    it("round-trips binary content via Docker", async () => {
       const binary = Buffer.alloc(256);
       for (let i = 0; i < 256; i++) binary[i] = i;
 
-      // WriteOperations takes string, but we need Buffer for binary
-      // Use transport directly for binary
-      const transport = await pool.getConnection("docker-test");
-      await transport.writeFile("/workspace/e2e-binary.bin", binary);
-      const read = await transport.readFile("/workspace/e2e-binary.bin");
+      const transport = await pool.getConnection("docker-bash");
+      const fpath = P.join(P.workspace, "e2e-binary.bin");
+      await transport.writeFile(fpath, binary);
+      const read = await transport.readFile(fpath);
       expect(read.equals(binary)).toBe(true);
-
-      await transport.exec("rm /workspace/e2e-binary.bin");
+      await transport.exec(P.rmFile(fpath, "bash"));
     });
 
-    it("SSH: round-trips binary content", async () => {
-      tm.switchTarget("ssh-test");
-      const transport = await pool.getConnection("ssh-test");
-
+    it("round-trips binary content via SSH", async () => {
       const binary = Buffer.alloc(256);
       for (let i = 0; i < 256; i++) binary[i] = i;
 
-      await transport.writeFile("/workspace/e2e-ssh-binary.bin", binary);
-      const read = await transport.readFile("/workspace/e2e-ssh-binary.bin");
+      const transport = await pool.getConnection("ssh-bash");
+      const fpath = P.join(P.workspace, "e2e-ssh-binary.bin");
+      await transport.writeFile(fpath, binary);
+      const read = await transport.readFile(fpath);
       expect(read.equals(binary)).toBe(true);
-
-      await transport.exec("rm /workspace/e2e-ssh-binary.bin");
-    });
-  });
-
-  // =========================================================================
-  // CRLF handling in edit operations
-  // =========================================================================
-  describe("CRLF handling", () => {
-    it("Docker: edit preserves CRLF line endings", async () => {
-      tm.switchTarget("docker-test");
-
-      // Write a file with CRLF endings (simulating a Windows file)
-      const crlfContent = "line1\r\nline2\r\nline3\r\n";
-      const transport = await pool.getConnection("docker-test");
-      await transport.writeFile("/workspace/e2e-crlf.txt", Buffer.from(crlfContent, "utf8"));
-
-      // Use pi's createEditTool with remote ops — this is the real edit path
-      const editOps = createRemoteEditOps(pool, tm);
-      const tool = createEditTool("/workspace", { operations: editOps });
-
-      // Edit with LF oldText (as the LLM would send it)
-      const result = await tool.execute("test-id", {
-        path: "/workspace/e2e-crlf.txt",
-        oldText: "line2",
-        newText: "MODIFIED",
-      });
-
-      // Verify success
-      expect(result.content[0]).toHaveProperty("text");
-      expect((result.content[0] as { text: string }).text).toContain("Successfully");
-
-      // Read back and verify CRLF is preserved
-      const final = await transport.readFile("/workspace/e2e-crlf.txt");
-      const finalStr = final.toString("utf8");
-      expect(finalStr).toBe("line1\r\nMODIFIED\r\nline3\r\n");
-
-      // Verify no stray LF-only endings
-      const lfOnly = finalStr.replace(/\r\n/g, "").indexOf("\n");
-      expect(lfOnly).toBe(-1);
-
-      await transport.exec("rm /workspace/e2e-crlf.txt");
-    });
-
-    it("SSH: edit preserves CRLF line endings", async () => {
-      tm.switchTarget("ssh-test");
-
-      const crlfContent = "alpha\r\nbeta\r\ngamma\r\n";
-      const transport = await pool.getConnection("ssh-test");
-      await transport.writeFile("/workspace/e2e-ssh-crlf.txt", Buffer.from(crlfContent, "utf8"));
-
-      const editOps = createRemoteEditOps(pool, tm);
-      const tool = createEditTool("/workspace", { operations: editOps });
-
-      const result = await tool.execute("test-id", {
-        path: "/workspace/e2e-ssh-crlf.txt",
-        oldText: "beta",
-        newText: "CHANGED",
-      });
-
-      expect((result.content[0] as { text: string }).text).toContain("Successfully");
-
-      const final = await transport.readFile("/workspace/e2e-ssh-crlf.txt");
-      expect(final.toString("utf8")).toBe("alpha\r\nCHANGED\r\ngamma\r\n");
-
-      await transport.exec("rm /workspace/e2e-ssh-crlf.txt");
-    });
-
-    it("Docker: edit preserves LF line endings", async () => {
-      tm.switchTarget("docker-test");
-
-      const lfContent = "line1\nline2\nline3\n";
-      const transport = await pool.getConnection("docker-test");
-      await transport.writeFile("/workspace/e2e-lf.txt", Buffer.from(lfContent, "utf8"));
-
-      const editOps = createRemoteEditOps(pool, tm);
-      const tool = createEditTool("/workspace", { operations: editOps });
-
-      await tool.execute("test-id", {
-        path: "/workspace/e2e-lf.txt",
-        oldText: "line2",
-        newText: "MODIFIED",
-      });
-
-      const final = await transport.readFile("/workspace/e2e-lf.txt");
-      const finalStr = final.toString("utf8");
-      expect(finalStr).toBe("line1\nMODIFIED\nline3\n");
-
-      // Verify no CRLF introduced
-      expect(finalStr.indexOf("\r")).toBe(-1);
-
-      await transport.exec("rm /workspace/e2e-lf.txt");
-    });
-
-    it("Docker: edit with multi-line oldText containing CRLF mismatch", async () => {
-      tm.switchTarget("docker-test");
-
-      // File has CRLF
-      const crlfContent = "function hello() {\r\n  return 'world';\r\n}\r\n";
-      const transport = await pool.getConnection("docker-test");
-      await transport.writeFile("/workspace/e2e-crlf-multi.txt", Buffer.from(crlfContent, "utf8"));
-
-      const editOps = createRemoteEditOps(pool, tm);
-      const tool = createEditTool("/workspace", { operations: editOps });
-
-      // LLM sends oldText with LF (as it always does)
-      await tool.execute("test-id", {
-        path: "/workspace/e2e-crlf-multi.txt",
-        oldText: "function hello() {\n  return 'world';\n}",
-        newText: "function hello() {\n  return 'universe';\n}",
-      });
-
-      const final = await transport.readFile("/workspace/e2e-crlf-multi.txt");
-      // Result should have CRLF preserved
-      expect(final.toString("utf8")).toBe("function hello() {\r\n  return 'universe';\r\n}\r\n");
-
-      await transport.exec("rm /workspace/e2e-crlf-multi.txt");
+      await transport.exec(P.rmFile(fpath, "bash"));
     });
   });
 });
