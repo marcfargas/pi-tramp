@@ -1,151 +1,81 @@
-# pi-tramp Handoff
+# pi-tramp — Handoff Document
 
-**Date**: 2026-02-20
-**From**: Design session (Opus 4.6 on mypi)
-**To**: Implementation agents on pi-tramp
+## Status: Phase 1 Implementation Complete
 
-## What Is This
+All 7 implementation tiers are done. 204 tests passing (131 unit + 73 integration).
 
-pi-tramp is a pi extension for TRAMP-like transparent remote execution. Pi stays local, tools (read/write/edit/bash) execute on remote targets via SSH or Docker exec.
-
-## Current State
-
-- ✅ Design document complete: `docs/DESIGN.md`
-- ✅ 3-stage design review complete: `docs/reviews/`
-- ✅ Takeaways distilled: `docs/TAKEAWAYS.md`
-- ✅ Author decisions recorded: `docs/reviews/stage-1/decisions.md`
-- ✅ TODOs created for all remaining work
-- ❌ 8 specifications not yet written (see TODO list, tag: `spec`)
-- ❌ 3 interface gaps not yet addressed (see TODO list, tag: `gap`)
-- ❌ SSH sentinel prototype not yet built (see TODO list, tag: `prototype`)
-- ❌ Project not yet scaffolded (no package.json, no tsconfig)
-
-## How To Start
-
-### Step 1: Read Context (30 min)
-1. `docs/DESIGN.md` — the full vision
-2. `docs/TAKEAWAYS.md` — distilled from 3-stage review
-3. `docs/reviews/stage-1/decisions.md` — author's scope decisions
-4. `todo list` — see all open work items
-
-### Step 2: Write Specs (Day -3 to Day -1)
-8 specs must be written before any code. Each has a TODO with exact requirements:
-- Sentinel protocol algorithm
-- Shell escaping algorithm
-- Shell detection commands
-- CRLF handling policy
-- Atomic write strategy
-- TargetConfig Zod schema
-- Error message format
-- trampExec() public API
-
-These can be parallelized — each spec is independent.
-
-### Step 3: Fill Interface Gaps (Day -2)
-3 gaps found in Stage 3 review. Each has a TODO:
-- Initial target selection (default field)
-- Context injection trigger (TargetManager event)
-- Temp file cleanup (UUID naming)
-
-### Step 4: Prototype (Day -1)
-Build `prototype/ssh-sentinel.mjs` — standalone Node.js script.
-Validates the hardest assumption. Must pass in 2-4 hours.
-If it takes >1 day, the sentinel approach needs revision.
-
-### Step 5: Scaffold (Day 0)
-Set up package.json, tsconfig, vitest, Dockerfiles, .gitignore.
-
-### Step 6: Implement (Weeks 1-6)
-Follow the build order in TAKEAWAYS.md:
-1. Interfaces → TargetManager → ShellDrivers (Week 1)
-2. DockerTransport + ConnectionPool (Week 2)
-3. SshTransport + sentinel (Weeks 3-4)
-4. operations-remote + tool-overrides + target-tool (Week 5)
-5. Context injection + status bar + extension.ts (Week 6)
-
-### Step 7: Integrate & Ship (Weeks 7-9)
-End-to-end tests, dog-fooding, bug fixes, docs.
-
-## Key Design Decisions (Non-Negotiable)
-
-These were decided by the author and must not be revisited:
-
-1. **SSH + Docker together** — both transports ship in Phase 1
-2. **All 4 tool overrides** — read/write/edit/bash are the core
-3. **SSH keys only** — no password auth
-4. **Serial command queue** — per-target, from day one
-5. **`sendMessage` for context injection** — not system prompt duplication
-6. **10MB binary limit** — fail fast with clear error
-7. **Edit = read-apply-write** — 2 round trips, preserve exact bytes
-8. **Shell detection on connect** — no probing for alternatives
-9. **pi-tramp must be the ONLY extension overriding core tools**
-
-## What NOT To Do
-
-- ❌ Don't start with Docker-only (reviewers suggested it, author rejected it)
-- ❌ Don't build both context injection approaches
-- ❌ Don't abstract BashDriver and PwshDriver (separate implementations, no shared logic)
-- ❌ Don't skip shell escaping tests against real shells
-- ❌ Don't defer token measurement to later phases
-- ❌ Don't assume `ctx.isUserInitiated` exists (it doesn't — blocked upstream)
-
-## TODO Tags Guide
-
-| Tag | Meaning |
-|-----|---------|
-| `master` | Master tracking TODO |
-| `spec` | Specification to write before coding |
-| `gap` | Interface gap to fill before coding |
-| `prototype` | Prototype to build before coding |
-| `scaffold` | Project setup |
-| `impl` | Implementation task |
-| `tier-N` | Dependency tier (build bottom-up: 0→7) |
-| `week-N` | Estimated week |
-| `test` | Testing task |
-| `docs` | Documentation task |
-| `upstream` | Upstream pi issue/feature request |
-
-## File Structure (Target)
+## Architecture
 
 ```
-pi-tramp/
-├── .pi/
-│   ├── AGENTS.md
-│   └── .project-owner
-├── docs/
-│   ├── DESIGN.md
-│   ├── TAKEAWAYS.md
-│   └── reviews/          (3-stage review artifacts)
-├── specs/                 (8 specs, to be written)
-├── prototype/             (SSH sentinel prototype)
-├── src/
-│   ├── types.ts           (Tier 0: interfaces)
-│   ├── target-manager.ts  (Tier 1)
-│   ├── shell/
-│   │   ├── bash-driver.ts (Tier 1)
-│   │   └── pwsh-driver.ts (Tier 1)
-│   ├── transport/
-│   │   ├── command-queue.ts  (Tier 2)
-│   │   ├── docker-transport.ts (Tier 2)
-│   │   └── ssh-transport.ts    (Tier 2)
-│   ├── connection-pool.ts (Tier 3)
-│   ├── operations/
-│   │   ├── remote-read.ts  (Tier 4)
-│   │   ├── remote-write.ts (Tier 4)
-│   │   ├── remote-edit.ts  (Tier 4)
-│   │   └── remote-bash.ts  (Tier 4)
-│   ├── tool-overrides.ts  (Tier 5)
-│   ├── target-tool.ts     (Tier 5)
-│   ├── context-injection.ts (Tier 6)
-│   └── extension.ts       (Tier 7: entry point)
-├── test/
-│   ├── fixtures/
-│   │   ├── docker-target/Dockerfile
-│   │   ├── ssh-server/Dockerfile
-│   │   └── pwsh-target/Dockerfile
-│   └── ...
-├── HANDOFF.md
-├── README.md
-├── package.json
-└── tsconfig.json
+src/
+  types.ts                      Tier 0: Interfaces, Zod schemas, error types
+  shell/
+    bash-driver.ts              Tier 1: POSIX shell escaping + command gen
+    pwsh-driver.ts              Tier 1: PowerShell escaping + command gen
+  target-manager.ts             Tier 1: Config loading, CRUD, switching, events
+  transport/
+    command-queue.ts            Tier 2: Serial execution queue
+    shell-detect.ts             Tier 2: Remote shell/platform probing
+    docker-transport.ts         Tier 2: One-shot docker exec
+    ssh-transport.ts            Tier 2: Persistent SSH + sentinel protocol
+  connection-pool.ts            Tier 3: Lazy connect, cache, reconnect
+  operations/
+    remote-ops.ts               Tier 4: pi's Read/Write/Edit/BashOperations
+  tool-overrides.ts             Tier 5: Conditional read/write/edit/bash routing
+  target-tool.ts                Tier 5: target list/switch/status/add/remove
+  context-injection.ts          Tier 6: System prompt, AGENTS.md, status bar
+  tramp-exec.ts                 Tier 6: Public API for other extensions
+  extension.ts                  Tier 7: Entry point wiring everything
+
+test/
+  types.test.ts                 16 tests: Zod schemas, error classes
+  shell-escaping.test.ts        67 tests: Real shell round-trips (bash + pwsh)
+  shell-detect.test.ts          14 tests: Shell/platform/arch parsing
+  target-manager.test.ts        25 tests: Config, CRUD, switching, events
+  command-queue.test.ts          5 tests: Serial execution, drain, errors
+  connection-pool.test.ts        4 tests: Error cases, empty pool
+  docker-transport.integration   16 tests: Real Docker container
+  ssh-transport.integration      17 tests: Real SSH via Docker
+  remote-ops.integration         10 tests: Operations via Docker
+  e2e.integration                30 tests: Full stack × both transports
 ```
+
+## Key Design Decisions
+
+1. **RuntimeState pattern**: Extension recreates TargetManager/Pool on session_start
+   (gets cwd from pi). Tool closures reference `state.pool` / `state.targetManager`.
+2. **No mocks for shell tests**: All escaping tests run against real bash and pwsh.
+3. **Sentinel protocol**: UUID-based markers delimit SSH command output. `-T` (no PTY).
+4. **Windows SSH**: Uses `C:\Windows\System32\OpenSSH\ssh.exe` for agent key access.
+5. **Serial queue**: Commands are serialized per transport to prevent SSH corruption.
+6. **createXxxTool pattern**: Tool overrides spread local tool's schema/render, override execute.
+
+## What's Left
+
+### Must-do before v1.0 ship
+- [ ] Dog-food on a real project
+- [ ] Handle CRLF in edit operations (line ending detection + normalization)
+- [ ] walkman (pwsh) e2e tests (currently only bash targets tested in CI)
+
+### Upstream blockers (filed, not blocking v1.0)
+- `registerTool` multi-override rendering bug (TODO-e4709f1f)
+- `ctx.isUserInitiated` for confirmation bypass (TODO-b6b49b8a)
+
+### Phase 2 (post v1.0)
+- Port forwarding
+- ControlMaster (Unix SSH multiplexing)
+- WSL transport
+- PSRemote transport
+- Credential forwarding
+
+## Test Infrastructure
+
+Docker image: `pi-tramp-ssh-test` (built from `test/fixtures/ssh-server/Dockerfile`)
+```bash
+docker build -t pi-tramp-ssh-test test/fixtures/ssh-server/
+docker run -d --name pi-tramp-ssh-test -p 2222:22 pi-tramp-ssh-test
+```
+
+SSH test key at `$TEMP/pi-tramp-test-key` (extracted from container on test run).
+
+walkman (Windows + pwsh): `marc@walkman.blegal.cloud:212` — for pwsh integration tests.
