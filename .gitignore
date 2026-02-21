@@ -3,6 +3,8 @@ dist/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+.env
+.env.*
 
 # Test artifacts
 *.pitramp.tmp
