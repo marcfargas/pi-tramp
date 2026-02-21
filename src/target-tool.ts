@@ -48,12 +48,16 @@ export function registerTargetTool(
   pi.registerTool({
     name: "target",
     label: "target",
-    description: `Manage remote execution targets. Actions:
-- list: Show available targets and which is active
-- switch <name>: Switch to target (or "local" for local execution)
+    description: `pi-tramp: Remote target management. When active, all tool calls (read, write, edit, bash) execute on the remote target instead of locally. Use this tool to connect to SSH servers or Docker containers.
+
+Actions:
+- list: Show configured targets and which is active
+- switch <name>: Connect to a target. All subsequent read/write/edit/bash calls execute there. Use "local" to return to local execution.
 - status: Show connection health for all targets
-- add <name> --config <json>: Add a dynamic target
-- remove <name>: Remove a dynamic target`,
+- add <name> --config <json>: Add a target. Config: {"type":"ssh","host":"user@host","port":22,"cwd":"/path"} or {"type":"docker","container":"name","cwd":"/path"}. Optional: "shell":"pwsh" for PowerShell targets.
+- remove <name>: Remove a dynamic target
+
+After switching, you do NOT need special syntax — just use read/write/edit/bash normally and they execute on the remote target transparently.`,
     parameters: targetSchema,
 
     async execute(_toolCallId, params: TargetToolInput) {

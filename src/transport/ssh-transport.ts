@@ -144,11 +144,14 @@ export class SshTransport extends EventEmitter implements Transport {
       // Host
       args.push(this.host);
 
-      // Always force bash as the outer shell for SSH.
-      // Even for pwsh targets, we use bash for the sentinel protocol
-      // (clean output, no prompts) and wrap pwsh commands via
-      // `pwsh -NoProfile -NonInteractive -Command '...'`.
-      args.push("bash", "--norc", "--noprofile");
+      // If shell is explicitly configured, force that shell for clean output.
+      // Otherwise, connect to the login shell and auto-detect.
+      if (this.configuredShell === "pwsh") {
+        args.push("pwsh", "-NoProfile", "-NonInteractive", "-Command", "-");
+      } else if (this.configuredShell === "bash" || this.configuredShell === "sh") {
+        args.push("bash", "--norc", "--noprofile");
+      }
+      // No configuredShell → use login shell, detect on connect
 
       this.ssh = spawn(SSH_BINARY, args, {
         stdio: ["pipe", "pipe", "pipe"],
@@ -197,9 +200,12 @@ export class SshTransport extends EventEmitter implements Transport {
       };
       this.currentTimeout = timeout;
 
-      // Send ready probe (outer shell is always bash)
-      const probeCmd = `printf '%s_%d\\n' '${probeSentinel}' 0\n`;
-      this.ssh.stdin!.write(probeCmd);
+      // Send ready probe — dual format for unknown login shells.
+      // One of these will succeed depending on what shell is running.
+      // bash/sh: printf works, Write-Output errors to stderr
+      // pwsh: Write-Output works, printf may or may not exist
+      this.ssh.stdin!.write(`printf '%s_%d\\n' '${probeSentinel}' 0 2>/dev/null\n`);
+      this.ssh.stdin!.write(`Write-Output "${probeSentinel}_0" 2>$null\n`);
     });
   }
 
@@ -282,33 +288,38 @@ export class SshTransport extends EventEmitter implements Transport {
   // --- Shell detection + setup ---
 
   private async detectShellAndSetup(): Promise<void> {
-    // Outer shell is always bash. Shell detection determines the COMMAND
-    // LANGUAGE: if pwsh is available and configured/detected, commands are
-    // wrapped in `pwsh -NonInteractive -Command '...'`.
-
     if (this.configuredShell && this.configuredShell !== "unknown") {
       this._shell = this.configuredShell;
-
-      // Verify pwsh is available if configured
-      if (this._shell === "pwsh") {
-        try {
-          const result = await this.execRaw(
-            "pwsh -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.Major'",
-            5000,
-          );
-          const version = parsePwshVersion(result.stdout);
-          if (version === null) {
-            throw new Error("pwsh not found");
-          }
-        } catch {
-          // pwsh not available — fall back to bash
-          this._shell = "bash";
-        }
-      }
     } else {
-      // No shell configured — outer shell is always bash, so default to bash.
-      // Users who want pwsh should configure shell: "pwsh" in their target.
-      this._shell = "bash";
+      // Auto-detect: try a pwsh-specific command
+      try {
+        const result = await this.execRawDual(
+          'echo "$($PSVersionTable.PSVersion.Major)"',
+          5000,
+        );
+        const version = parsePwshVersion(result.stdout);
+        if (version !== null) {
+          this._shell = "pwsh";
+        }
+      } catch {
+        // Not pwsh or timeout
+      }
+      if (this._shell === "unknown") {
+        this._shell = "bash";
+      }
+    }
+
+    // pwsh session setup — suppress ANSI, progress bars
+    if (this._shell === "pwsh") {
+      try {
+        await this.execRaw(
+          'try { $PSStyle.OutputRendering = "PlainText" } catch {}; ' +
+          '$ProgressPreference = "SilentlyContinue"',
+          5000,
+        );
+      } catch {
+        // Non-fatal
+      }
     }
   }
 
@@ -401,6 +412,43 @@ export class SshTransport extends EventEmitter implements Transport {
 
   // --- Internal: sentinel-wrapped exec ---
 
+  /**
+   * Execute with dual-format sentinel — for shell detection when we
+   * don't yet know if the login shell is bash or pwsh.
+   */
+  private execRawDual(command: string, timeoutMs: number): Promise<ExecResult> {
+    return new Promise((resolve, reject) => {
+      if (!this.ssh || !this.ssh.stdin?.writable) {
+        reject(new Error("SSH process not available"));
+        return;
+      }
+
+      const sentinelId = randomUUID().replace(/-/g, "");
+      const sentinel = `__PITRAMP_${sentinelId}__`;
+
+      this.sentinelRegex = new RegExp(`^${sentinel}_(\\d+)$`);
+      this.outputChunks = [];
+      this.currentResolve = resolve;
+      this.currentReject = reject;
+
+      this.currentTimeout = setTimeout(() => {
+        this.sentinelRegex = null;
+        this.currentResolve = null;
+        this.currentReject = null;
+        reject(Object.assign(
+          new Error(`Detection timed out after ${timeoutMs}ms`),
+          { kind: "timeout", after_ms: timeoutMs },
+        ));
+        try { this.ssh?.stdin?.write("\x03\n"); } catch { /* ignore */ }
+      }, timeoutMs);
+
+      // Send command + both sentinel formats
+      const bashSentinel = `printf '%s_%d\\n' '${sentinel}' $? 2>/dev/null`;
+      const pwshSentinel = `Write-Output "${sentinel}_$LASTEXITCODE" 2>$null`;
+      this.ssh.stdin!.write(`${command}\n${bashSentinel}\n${pwshSentinel}\n`);
+    });
+  }
+
   private execRaw(command: string, timeoutMs?: number): Promise<ExecResult> {
     const timeout = timeoutMs ?? this.defaultTimeout;
 
@@ -430,31 +478,18 @@ export class SshTransport extends EventEmitter implements Transport {
         try { this.ssh?.stdin?.write("\x03\n"); } catch { /* ignore */ }
       }, timeout);
 
-      // Outer shell is always bash (even for pwsh targets).
-      // For pwsh targets, wrap the command in a pwsh invocation.
-      let effectiveCmd: string;
+      // Build the wrapped command + sentinel based on detected shell.
+      let wrapped: string;
       if (this._shell === "pwsh") {
-        // Build the full pwsh script to run:
-        // 1. Suppress ANSI rendering (pwsh 7.2+)
-        // 2. Suppress progress bars
-        // 3. Reset sticky $LASTEXITCODE
-        // 4. Run the actual command
-        // 5. Exit with $LASTEXITCODE so bash $? gets the right code
-        const pwshSetup =
-          'try { $PSStyle.OutputRendering = "PlainText" } catch {}; ' +
-          '$ProgressPreference = "SilentlyContinue"; ' +
-          "$global:LASTEXITCODE = 0";
-        const fullPwshScript = `${pwshSetup}; ${command}; exit $LASTEXITCODE`;
-
-        // Bash-escape the entire pwsh script for embedding in single quotes
-        const bashEscaped = fullPwshScript.replace(/'/g, "'\\''");
-        effectiveCmd = `pwsh -NoProfile -NonInteractive -Command '${bashEscaped}'`;
+        // pwsh: send directly with pwsh sentinel
+        wrapped =
+          "$global:LASTEXITCODE = 0\n" +
+          `${command}\n` +
+          `Write-Output "${sentinel}_$LASTEXITCODE"\n`;
       } else {
-        effectiveCmd = command;
+        // bash/sh: send directly with bash sentinel
+        wrapped = `${command}\nprintf '%s_%d\\n' '${sentinel}' $?\n`;
       }
-
-      // Always use bash sentinel (outer shell is always bash)
-      const wrapped = `${effectiveCmd}\nprintf '%s_%d\\n' '${sentinel}' $?\n`;
 
       this.ssh.stdin!.write(wrapped);
     });

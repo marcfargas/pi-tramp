@@ -166,10 +166,9 @@ describe("SshTransport (pwsh)", () => {
   });
 
   it("captures exit code", async () => {
-    // Use $host.SetShouldExit() to set exit code without killing session
-    // Actually for sentinel protocol, test with a failing command
-    const result = await transport.exec("Get-Item /nonexistent_path_12345 -ErrorAction SilentlyContinue; if (-not $?) { exit 1 }");
-    expect(result.exitCode).not.toBe(0);
+    // Use a failing native command to set $LASTEXITCODE without killing session
+    const result = await transport.exec("pwsh -NoProfile -Command 'exit 42'");
+    expect(result.exitCode).toBe(42);
   });
 
   it("handles multi-line output", async () => {
