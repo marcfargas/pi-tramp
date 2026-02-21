@@ -74,6 +74,19 @@ export function parseArch(output: string): string {
 }
 
 /**
+ * Parse the output of the cmd/PowerShell polyglot command.
+ * Source: https://stackoverflow.com/a/61469226 (CC BY-SA 4.0)
+ * Polyglot: (dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition
+ * Returns: "cmd" | "pwsh" | "unknown"
+ */
+export function parseShellPolyglot(output: string): ShellType {
+  const cleaned = stripAnsi(output).trim();
+  if (cleaned.includes("CMD")) return "cmd";
+  if (cleaned.includes("Core") || cleaned.includes("Desktop")) return "pwsh";
+  return "unknown";
+}
+
+/**
  * Check if `$PSVersionTable` output indicates PowerShell.
  * Returns the major version number if pwsh, null otherwise.
  */

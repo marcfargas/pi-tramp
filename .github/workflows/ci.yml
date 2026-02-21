@@ -165,48 +165,28 @@ jobs:
             }
           }
 
-      - name: Start SSH container
-        run: docker run -d --name pi-tramp-win-test -p 2222:22 pi-tramp-win-test
+      - name: Start SSH containers (cmd + pwsh defaults)
+        shell: pwsh
+        run: |
+          # Container 1: cmd.exe as DefaultShell (Windows default, port 2222)
+          docker run -d --name pi-tramp-win-cmd -p 2222:22 pi-tramp-win-test
+
+          # Container 2: pwsh as DefaultShell (real-world Windows servers, port 2223)
+          docker run -d --name pi-tramp-win-pwsh -p 2223:22 pi-tramp-win-test `
+            powershell -Command "New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\pwsh\pwsh.exe' -PropertyType String -Force; Start-Service sshd; while (`$true) { Start-Sleep 3600 }"
 
       - name: Wait for SSH
         shell: pwsh
         run: |
-          for ($i = 0; $i -lt 30; $i++) {
-            try {
-              $null = Test-NetConnection -ComputerName localhost -Port 2222 -ErrorAction Stop
-              Write-Host "SSH ready"
-              break
-            } catch { Start-Sleep 2 }
+          foreach ($port in @(2222, 2223)) {
+            for ($i = 0; $i -lt 30; $i++) {
+              try {
+                $null = Test-NetConnection -ComputerName localhost -Port $port -ErrorAction Stop
+                Write-Host "SSH ready on port $port"
+                break
+              } catch { Start-Sleep 2 }
+            }
           }
-
-      - name: Diagnose default SSH shell
-        shell: bash
-        run: |
-          # Copy the test key out of the container
-          docker cp pi-tramp-win-test:C:/test_key ./test_key
-          chmod 600 ./test_key
-
-          echo "=== Raw SSH session (no remote command) ==="
-          echo "Sending polyglot + diagnostics through stdin..."
-          {
-            # Source: https://stackoverflow.com/a/61469226 (CC BY-SA 4.0)
-            # Returns: CMD | Core | Desktop
-            echo '(dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition'
-            echo 'echo BASH_VERSION=$BASH_VERSION'
-            echo 'echo SHELL=$SHELL'
-            echo 'echo %COMSPEC%'
-            echo 'exit'
-          } | ssh -T -i ./test_key -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=no testuser@localhost 2>&1 || true
-
-          echo ""
-          echo "=== SSH with explicit pwsh remote command ==="
-          ssh -T -i ./test_key -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=no testuser@localhost pwsh -NoProfile -NonInteractive -Command '$PSVersionTable; echo "PSEdition=$($PSVersionTable.PSEdition)"' 2>&1 || true
-
-          echo ""
-          echo "=== SSH with explicit bash remote command ==="
-          ssh -T -i ./test_key -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=no testuser@localhost bash -c 'echo "BASH=$BASH_VERSION SHELL=$SHELL"' 2>&1 || true
-
-          rm -f ./test_key
 
       - name: Run integration tests
         env:
@@ -217,7 +197,8 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          docker rm -f pi-tramp-win-test 2>$null
+          docker rm -f pi-tramp-win-cmd 2>$null
+          docker rm -f pi-tramp-win-pwsh 2>$null
           docker rm -f pi-tramp-e2e-win-docker 2>$null
 
   audit:

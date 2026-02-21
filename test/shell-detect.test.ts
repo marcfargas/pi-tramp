@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseShellName, parsePlatform, parseArch, parsePwshVersion } from "../src/transport/shell-detect.js";
+import { parseShellName, parsePlatform, parseArch, parsePwshVersion, parseShellPolyglot } from "../src/transport/shell-detect.js";
 
 describe("parseShellName", () => {
   it("parses bash", () => {
@@ -139,5 +139,30 @@ describe("parsePwshVersion", () => {
 
   it("strips ANSI escape codes", () => {
     expect(parsePwshVersion("\x1b[32m7\x1b[0m")).toBe(7);
+  });
+});
+
+describe("parseShellPolyglot", () => {
+  it("detects cmd.exe", () => {
+    expect(parseShellPolyglot("CMD")).toBe("cmd");
+    expect(parseShellPolyglot("CMD\r\n")).toBe("cmd");
+  });
+
+  it("detects PowerShell Core (pwsh 7)", () => {
+    expect(parseShellPolyglot("Core")).toBe("pwsh");
+    expect(parseShellPolyglot("Core\r\n")).toBe("pwsh");
+  });
+
+  it("detects Windows PowerShell (Desktop)", () => {
+    expect(parseShellPolyglot("Desktop")).toBe("pwsh");
+  });
+
+  it("returns unknown for bash/unrecognized output", () => {
+    expect(parseShellPolyglot("bash: syntax error")).toBe("unknown");
+    expect(parseShellPolyglot("")).toBe("unknown");
+  });
+
+  it("strips ANSI codes", () => {
+    expect(parseShellPolyglot("\x1b[32mCore\x1b[0m")).toBe("pwsh");
   });
 });
