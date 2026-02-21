@@ -45,6 +45,9 @@ jobs:
   # ---------------------------------------------------------------------------
   test-integration-linux:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -53,8 +56,36 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Build Linux test container
-        run: docker build -t pi-tramp-ssh-test test/fixtures/ssh-server/
+      - name: Compute Dockerfile hash
+        id: df-hash
+        run: echo "hash=$(sha256sum test/fixtures/ssh-server/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull or build Linux test container
+        run: |
+          image="ghcr.io/${{ github.repository_owner }}/pi-tramp-ssh-test"
+          tag="${{ steps.df-hash.outputs.hash }}"
+          fullTag="${image}:${tag}"
+
+          # Try to pull cached image
+          if docker pull "$fullTag" 2>/dev/null; then
+            echo "✅ Using cached image: $fullTag"
+            docker tag "$fullTag" pi-tramp-ssh-test
+          else
+            echo "🔨 Cache miss — building from scratch"
+            docker build -t pi-tramp-ssh-test test/fixtures/ssh-server/
+            docker tag pi-tramp-ssh-test "$fullTag"
+            docker push "$fullTag"
+            # Also push as :latest
+            docker tag pi-tramp-ssh-test "${image}:latest"
+            docker push "${image}:latest"
+          fi
 
       - name: Start SSH container
         run: docker run -d --name pi-tramp-ssh-test -p 2222:22 pi-tramp-ssh-test
@@ -79,6 +110,9 @@ jobs:
   # ---------------------------------------------------------------------------
   test-integration-windows:
     runs-on: windows-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -87,8 +121,39 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Build Windows test container
-        run: docker build -t pi-tramp-win-test test/fixtures/windows-ssh-server/
+      - name: Compute Dockerfile hash
+        id: df-hash
+        shell: bash
+        run: echo "hash=$(sha256sum test/fixtures/windows-ssh-server/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull or build Windows test container
+        shell: pwsh
+        run: |
+          $image = "ghcr.io/${{ github.repository_owner }}/pi-tramp-win-test"
+          $tag = "${{ steps.df-hash.outputs.hash }}"
+          $fullTag = "${image}:${tag}"
+
+          # Try to pull cached image
+          docker pull $fullTag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Using cached image: $fullTag"
+            docker tag $fullTag pi-tramp-win-test
+          } else {
+            Write-Host "🔨 Cache miss — building from scratch"
+            docker build -t pi-tramp-win-test test/fixtures/windows-ssh-server/
+            docker tag pi-tramp-win-test $fullTag
+            docker push $fullTag
+            # Also push as :latest
+            docker tag pi-tramp-win-test "${image}:latest"
+            docker push "${image}:latest"
+          }
 
       - name: Start SSH container
         run: docker run -d --name pi-tramp-win-test -p 2222:22 pi-tramp-win-test
