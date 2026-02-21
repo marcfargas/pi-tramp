@@ -1,0 +1,11 @@
+{
+  "mode": "pre",
+  "tag": "beta",
+  "initialVersions": {
+    "@marcfargas/pi-tramp": "0.1.0"
+  },
+  "changesets": [
+    "initial-alpha-release",
+    "v0.2.0-bug-fixes"
+  ]
+}

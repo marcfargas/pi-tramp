@@ -1,8 +1,11 @@
 /**
- * DockerTransport integration tests.
+ * DockerTransport integration tests — Linux containers only.
  *
  * Requires: docker run -d --name pi-tramp-ssh-test -p 2222:22 pi-tramp-ssh-test
  * (The SSH test container also works as a Docker exec target.)
+ *
+ * Windows: skipped — Linux-specific commands (echo -e, true, rm).
+ * Windows Docker coverage is provided by e2e.integration.test.ts.
  *
  * Run: npm run test:integration
  */
@@ -12,15 +15,18 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { DockerTransport } from "../src/transport/docker-transport.js";
 import type { DockerTargetConfig } from "../src/types.js";
+import { getTestPlatform } from "./helpers/platform.js";
 
 const execFileAsync = promisify(execFile);
+const P = getTestPlatform();
+const isWindows = P.os === "windows";
 
 const CONTAINER = "pi-tramp-test-docker";
-const IMAGE = "pi-tramp-ssh-test"; // reuse the SSH test image
+const IMAGE = P.image; // platform-aware: pi-tramp-ssh-test (Linux) or pi-tramp-win-test (Windows)
 
 let transport: DockerTransport;
 
-describe("DockerTransport", () => {
+describe.skipIf(isWindows)("DockerTransport", () => {
   beforeAll(async () => {
     // Start a fresh container for testing
     try {
@@ -29,7 +35,7 @@ describe("DockerTransport", () => {
 
     await execFileAsync("docker", [
       "run", "-d", "--name", CONTAINER, IMAGE,
-      "sleep", "infinity",
+      ...P.keepaliveArgs,
     ]);
 
     // Wait a moment for container to be ready
@@ -45,10 +51,8 @@ describe("DockerTransport", () => {
   }, 30000);
 
   afterAll(async () => {
-    await transport.close();
-    try {
-      await execFileAsync("docker", ["rm", "-f", CONTAINER]);
-    } catch { /* ignore */ }
+    await transport?.close();
+    try { await execFileAsync("docker", ["rm", "-f", CONTAINER]); } catch { /* ignore */ }
   });
 
   describe("connection", () => {

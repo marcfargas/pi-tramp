@@ -1,81 +1,64 @@
-# pi-tramp — Handoff Document
+# pi-tramp — Handoff
 
-## Status: Phase 1 Implementation Complete
+Current state for future sessions. Read this first.
 
-All 7 implementation tiers are done. 204 tests passing (131 unit + 73 integration).
+## Status: v1.0 Feature Complete, CI Hardening
 
-## Architecture
+All code is implemented and tested locally. CI matrix covers Linux + Windows.
+Windows container SSH tests may still need iteration (ssh-keygen passphrase quoting).
 
-```
-src/
-  types.ts                      Tier 0: Interfaces, Zod schemas, error types
-  shell/
-    bash-driver.ts              Tier 1: POSIX shell escaping + command gen
-    pwsh-driver.ts              Tier 1: PowerShell escaping + command gen
-  target-manager.ts             Tier 1: Config loading, CRUD, switching, events
-  transport/
-    command-queue.ts            Tier 2: Serial execution queue
-    shell-detect.ts             Tier 2: Remote shell/platform probing
-    docker-transport.ts         Tier 2: One-shot docker exec
-    ssh-transport.ts            Tier 2: Persistent SSH + sentinel protocol
-  connection-pool.ts            Tier 3: Lazy connect, cache, reconnect
-  operations/
-    remote-ops.ts               Tier 4: pi's Read/Write/Edit/BashOperations
-  tool-overrides.ts             Tier 5: Conditional read/write/edit/bash routing
-  target-tool.ts                Tier 5: target list/switch/status/add/remove
-  context-injection.ts          Tier 6: System prompt, AGENTS.md, status bar
-  tramp-exec.ts                 Tier 6: Public API for other extensions
-  extension.ts                  Tier 7: Entry point wiring everything
+## Branch Structure
 
-test/
-  types.test.ts                 16 tests: Zod schemas, error classes
-  shell-escaping.test.ts        67 tests: Real shell round-trips (bash + pwsh)
-  shell-detect.test.ts          14 tests: Shell/platform/arch parsing
-  target-manager.test.ts        25 tests: Config, CRUD, switching, events
-  command-queue.test.ts          5 tests: Serial execution, drain, errors
-  connection-pool.test.ts        4 tests: Error cases, empty pool
-  docker-transport.integration   16 tests: Real Docker container
-  ssh-transport.integration      17 tests: Real SSH via Docker
-  remote-ops.integration         10 tests: Operations via Docker
-  e2e.integration                30 tests: Full stack × both transports
-```
+- **`main`** — clean, release-ready. Release workflow publishes from here.
+- **`develop`** — active development. PR to main for releases.
 
-## Key Design Decisions
+## Test Status
 
-1. **RuntimeState pattern**: Extension recreates TargetManager/Pool on session_start
-   (gets cwd from pi). Tool closures reference `state.pool` / `state.targetManager`.
-2. **No mocks for shell tests**: All escaping tests run against real bash and pwsh.
-3. **Sentinel protocol**: UUID-based markers delimit SSH command output. `-T` (no PTY).
-4. **Windows SSH**: Uses `C:\Windows\System32\OpenSSH\ssh.exe` for agent key access.
-5. **Serial queue**: Commands are serialized per transport to prevent SSH corruption.
-6. **createXxxTool pattern**: Tool overrides spread local tool's schema/render, override execute.
+- **128 unit tests** — pass on Linux + Windows × Node 20/22/24
+- **49 e2e integration tests** — parameterized 4 scenarios: Docker×bash, Docker×pwsh, SSH×bash, SSH×pwsh
+- **Linux CI integration**: ✅ all green
+- **Windows CI integration**: Docker tests pass, SSH tests pending (key generation issue)
 
-## What's Left
+## Key Files
 
-### Must-do before v1.0 ship
-- [ ] Dog-food on a real project
-- [ ] Handle CRLF in edit operations (line ending detection + normalization)
-- [ ] walkman (pwsh) e2e tests (currently only bash targets tested in CI)
+| File | Purpose |
+|------|---------|
+| `src/types.ts` | All interfaces + Zod schemas |
+| `src/transport/ssh-transport.ts` | Persistent SSH with sentinel protocol |
+| `src/transport/docker-transport.ts` | One-shot docker exec |
+| `src/shell/bash-driver.ts` | Bash shell escaping + command generation |
+| `src/shell/pwsh-driver.ts` | PowerShell escaping + .NET API commands |
+| `src/operations/remote-ops.ts` | Read/Write/Edit/Bash operations |
+| `src/connection-pool.ts` | Lazy connect, caching, dead eviction |
+| `src/target-manager.ts` | Config CRUD, switching, events |
+| `src/target-tool.ts` | The `target` tool (list/switch/add/remove/status) |
+| `src/tool-overrides.ts` | Conditional routing: local vs remote |
+| `src/extension.ts` | Entry point wiring everything together |
+| `test/helpers/platform.ts` | Cross-platform test helpers |
+| `test/fixtures/ssh-server/Dockerfile` | Linux test container (bash + pwsh) |
+| `test/fixtures/windows-ssh-server/Dockerfile` | Windows test container (Server Core) |
 
-### Upstream blockers (filed, not blocking v1.0)
-- `registerTool` multi-override rendering bug (TODO-e4709f1f)
-- `ctx.isUserInitiated` for confirmation bypass (TODO-b6b49b8a)
+## Known Issues
 
-### Phase 2 (post v1.0)
-- Port forwarding
-- ControlMaster (Unix SSH multiplexing)
-- WSL transport
-- PSRemote transport
-- Credential forwarding
+1. **Windows SSH key in CI** — PowerShell mangles empty string to ssh-keygen `-N ""`.
+   Current fix: `SHELL ["cmd"]` for that one step. May need more iteration.
 
-## Test Infrastructure
+2. **`registerTool` rendering** — upstream pi bug. When pi-tramp overrides tools,
+   the tool description in the TUI can render incorrectly. `TODO-e4709f1f`.
 
-Docker image: `pi-tramp-ssh-test` (built from `test/fixtures/ssh-server/Dockerfile`)
-```bash
-docker build -t pi-tramp-ssh-test test/fixtures/ssh-server/
-docker run -d --name pi-tramp-ssh-test -p 2222:22 pi-tramp-ssh-test
-```
+3. **`ctx.isUserInitiated`** — upstream pi. Tool overrides should skip confirmation
+   when the user invoked the tool directly. `TODO-b6b49b8a`.
 
-SSH test key at `$TEMP/pi-tramp-test-key` (extracted from container on test run).
+4. **BashDriver requires `base64`** — MinGit on Windows doesn't include it.
+   Full Git for Windows or Linux coreutils required. Could add fallback (certutil,
+   python, perl) in Phase 2.
 
-walkman (Windows + pwsh): `marc@walkman.blegal.cloud:212` — for pwsh integration tests.
+## Architecture Decisions
+
+- **Windows SSH binary**: Always use `C:\Windows\System32\OpenSSH\ssh.exe` for agent access
+- **pwsh over SSH**: bash is the outer shell (sentinel protocol). pwsh commands wrapped in `pwsh -NoProfile -NonInteractive -Command '...'`
+- **SSH shell configuration**: `shell` is required for SSH targets (`bash` or `pwsh`)
+- **pwsh over SSH**: Launches directly with clean flags (`pwsh -NoProfile -NonInteractive -Command -`)
+- **cwd optional**: Defaults to remote home directory on connect
+- **CRLF**: Handled by pi's `createEditTool` transparently — no pi-tramp code needed
+- **Exit codes in tests**: Docker pwsh uses `exit N` (ephemeral). SSH pwsh spawns child `pwsh -c 'exit N'` (persistent session)

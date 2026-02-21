@@ -12,6 +12,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { TargetManager } from "../src/target-manager.js";
 import { ConnectionPool } from "../src/connection-pool.js";
+import { getTestPlatform } from "./helpers/platform.js";
 import {
   createRemoteReadOps,
   createRemoteWriteOps,
@@ -22,17 +23,22 @@ import type { TargetConfig } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
 
+const P = getTestPlatform();
+const isWindows = P.os === "windows";
+
 const CONTAINER = "pi-tramp-test-ops";
-const IMAGE = "pi-tramp-ssh-test";
+const IMAGE = P.image;
 
 let tm: TargetManager;
 let pool: ConnectionPool;
 
-describe("Remote Operations", () => {
+// Linux-only: uses /workspace, bash commands (cat, rm, test -d).
+// Windows Docker coverage is provided by e2e.integration.test.ts.
+describe.skipIf(isWindows)("Remote Operations", () => {
   beforeAll(async () => {
     // Start container
     try { await execFileAsync("docker", ["rm", "-f", CONTAINER]); } catch { /* */ }
-    await execFileAsync("docker", ["run", "-d", "--name", CONTAINER, IMAGE, "sleep", "infinity"]);
+    await execFileAsync("docker", ["run", "-d", "--name", CONTAINER, IMAGE, ...P.keepaliveArgs]);
     await new Promise((r) => setTimeout(r, 500));
 
     // Setup target manager and pool
@@ -51,7 +57,7 @@ describe("Remote Operations", () => {
   }, 30000);
 
   afterAll(async () => {
-    await pool.closeAll();
+    await pool?.closeAll();
     try { await execFileAsync("docker", ["rm", "-f", CONTAINER]); } catch { /* */ }
   });
 

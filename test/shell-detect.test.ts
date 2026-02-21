@@ -30,6 +30,29 @@ describe("parseShellName", () => {
     expect(parseShellName("powershell")).toBe("pwsh");
   });
 
+  it("parses cmd", () => {
+    expect(parseShellName("cmd")).toBe("cmd");
+    expect(parseShellName("cmd.exe")).toBe("cmd");
+  });
+
+  it("parses Windows-style paths (backslash separators)", () => {
+    expect(parseShellName("C:\\Program Files\\PowerShell\\7\\pwsh.exe")).toBe("pwsh");
+    expect(parseShellName("C:\\Windows\\System32\\bash.exe")).toBe("bash");
+    expect(parseShellName("C:\\Windows\\System32\\cmd.exe")).toBe("cmd");
+    expect(parseShellName("C:\\pwsh\\pwsh.exe")).toBe("pwsh");
+  });
+
+  it("strips .exe suffix on Windows paths", () => {
+    expect(parseShellName("/usr/bin/bash")).toBe("bash");
+    expect(parseShellName("C:\\pwsh\\pwsh.exe")).toBe("pwsh");
+    expect(parseShellName("powershell.exe")).toBe("pwsh");
+  });
+
+  it("strips ANSI escape codes", () => {
+    expect(parseShellName("\x1b[32mbash\x1b[0m")).toBe("bash");
+    expect(parseShellName("\x1b[1m/bin/bash\x1b[0m")).toBe("bash");
+  });
+
   it("returns unknown for unrecognized", () => {
     expect(parseShellName("fish")).toBe("unknown");
     expect(parseShellName("")).toBe("unknown");
@@ -54,6 +77,14 @@ describe("parsePlatform", () => {
     expect(parsePlatform("MSYS_NT-10.0")).toBe("windows");
     expect(parsePlatform("CYGWIN_NT-10.0")).toBe("windows");
     expect(parsePlatform("windows")).toBe("windows");
+    expect(parsePlatform("Windows_NT")).toBe("windows");
+    expect(parsePlatform("Windows_NT 10.0")).toBe("windows");
+    expect(parsePlatform("Windows")).toBe("windows");
+  });
+
+  it("strips ANSI escape codes", () => {
+    expect(parsePlatform("\x1b[32mLinux\x1b[0m")).toBe("linux");
+    expect(parsePlatform("\x1b[1mDarwin\x1b[0m")).toBe("darwin");
   });
 
   it("returns unknown for unrecognized", () => {
@@ -72,12 +103,32 @@ describe("parseArch", () => {
   it("handles empty", () => {
     expect(parseArch("")).toBe("unknown");
   });
+
+  it("strips ANSI escape codes", () => {
+    expect(parseArch("\x1b[32mx86_64\x1b[0m")).toBe("x86_64");
+  });
+
+  it("rejects absurdly long values", () => {
+    expect(parseArch("a".repeat(1000))).toBe("unknown");
+  });
 });
 
 describe("parsePwshVersion", () => {
   it("parses version numbers", () => {
     expect(parsePwshVersion("7")).toBe(7);
     expect(parsePwshVersion("5")).toBe(5);
+    expect(parsePwshVersion("  7\n")).toBe(7);
+  });
+
+  it("rejects garbage suffixes (parseInt would accept these)", () => {
+    expect(parsePwshVersion("7junk")).toBeNull();
+    expect(parsePwshVersion("5.1")).toBeNull();
+    expect(parsePwshVersion("7 extra")).toBeNull();
+  });
+
+  it("rejects zero and negative", () => {
+    expect(parsePwshVersion("0")).toBeNull();
+    expect(parsePwshVersion("-1")).toBeNull();
   });
 
   it("returns null for non-numbers", () => {
@@ -85,4 +136,10 @@ describe("parsePwshVersion", () => {
     expect(parsePwshVersion("error")).toBeNull();
     expect(parsePwshVersion(".PSVersion.Major")).toBeNull();
   });
+
+  it("strips ANSI escape codes", () => {
+    expect(parsePwshVersion("\x1b[32m7\x1b[0m")).toBe(7);
+  });
 });
+
+

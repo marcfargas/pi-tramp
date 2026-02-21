@@ -32,11 +32,6 @@ const SSH_BINARY = process.platform === "win32"
   ? "C:\\Windows\\System32\\OpenSSH\\ssh.exe"
   : "ssh";
 
-// pwsh expression for $LASTEXITCODE that handles $null → 0.
-// $LASTEXITCODE is $null until an external program runs, so raw
-// interpolation like "${sentinel}_$LASTEXITCODE" omits the digits
-// and breaks the sentinel regex (\d+).
-const ESC_LASTEXITCODE = "$LASTEXITCODE -as [int]";
 
 export class SshTransport extends EventEmitter implements Transport {
   readonly type = "ssh" as const;
@@ -64,7 +59,7 @@ export class SshTransport extends EventEmitter implements Transport {
   private readonly host: string;
   private readonly port: number;
   private readonly identityFile: string | undefined;
-  private configuredShell: ShellType | undefined; // mutable: set after auto-detection
+  private readonly configuredShell: ShellType;
   private readonly defaultTimeout: number;
 
   constructor(config: SshTargetConfig) {
@@ -72,7 +67,7 @@ export class SshTransport extends EventEmitter implements Transport {
     this.host = config.host;
     this.port = config.port ?? 22;
     this.identityFile = config.identityFile;
-    this.configuredShell = config.shell as ShellType | undefined;
+    this.configuredShell = config.shell as ShellType;
     this.defaultTimeout = config.timeout ?? 60000;
   }
 
@@ -153,14 +148,13 @@ export class SshTransport extends EventEmitter implements Transport {
       // Host
       args.push(this.host);
 
-      // If shell is explicitly configured, force that shell for clean output.
-      // Otherwise, connect to the login shell and auto-detect.
+      // Shell is always configured — force it as the SSH remote command.
       if (this.configuredShell === "pwsh") {
         args.push("pwsh", "-NoProfile", "-NonInteractive", "-Command", "-");
-      } else if (this.configuredShell === "bash" || this.configuredShell === "sh") {
-        args.push("bash", "--norc", "--noprofile");
+      } else {
+        // bash or sh
+        args.push(this.configuredShell, "--login");
       }
-      // No configuredShell → use login shell, detect on connect
 
       this.ssh = spawn(SSH_BINARY, args, {
         stdio: ["pipe", "pipe", "pipe"],
@@ -209,12 +203,12 @@ export class SshTransport extends EventEmitter implements Transport {
       };
       this.currentTimeout = timeout;
 
-      // Send ready probe — dual format for unknown login shells.
-      // One of these will succeed depending on what shell is running.
-      // bash/sh: printf works, Write-Output errors to stderr
-      // pwsh: Write-Output works, printf may or may not exist
-      this.ssh.stdin!.write(`printf '%s_%d\\n' '${probeSentinel}' 0 2>/dev/null\n`);
-      this.ssh.stdin!.write(`Write-Output "${probeSentinel}_0" 2>$null\n`);
+      // Shell-specific probe — we always know the shell upfront.
+      if (this.configuredShell === "pwsh") {
+        this.ssh.stdin!.write(`Write-Output "${probeSentinel}_0"\n`);
+      } else {
+        this.ssh.stdin!.write(`printf '%s_%d\\n' '${probeSentinel}' 0\n`);
+      }
     });
   }
 
@@ -222,7 +216,7 @@ export class SshTransport extends EventEmitter implements Transport {
     if (this.ssh) {
       try {
         // Remove all listeners first to prevent onSshDeath firing
-        // during intentional reconnects (e.g., shell auto-detection).
+        // during intentional reconnect flows.
         this.ssh.removeAllListeners();
         this.ssh.stdout?.removeAllListeners();
         this.ssh.stderr?.removeAllListeners();
@@ -290,6 +284,11 @@ export class SshTransport extends EventEmitter implements Transport {
           this.sentinelRegex = null;
           this.outputChunks = [];
 
+          // NOTE: stderr is always empty here. The SSH transport runs commands
+          // through a single PTY stream where stdout and stderr are multiplexed
+          // into one channel — there is no separate stderr fd. Capturing stderr
+          // separately would require command wrapping (e.g. `cmd 2>/tmp/e; ...`)
+          // which is a larger architectural change. Known limitation.
           resolve?.({ stdout, stderr: "", exitCode });
           return;
         }
@@ -302,36 +301,8 @@ export class SshTransport extends EventEmitter implements Transport {
   // --- Shell detection + setup ---
 
   private async detectShellAndSetup(): Promise<void> {
-    if (this.configuredShell && this.configuredShell !== "unknown") {
-      this._shell = this.configuredShell;
-    } else {
-      // Auto-detect: use a unique marker for robustness against shell noise
-      // (prompts, echoed input, banners — common on Windows pwsh login shells).
-      const marker = `PITRAMP_PWSH_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-      try {
-        const result = await this.execRawDual(
-          `Write-Output "${marker}"`,
-          5000,
-        );
-        if (result.stdout.includes(marker)) {
-          this._shell = "pwsh";
-        }
-      } catch {
-        // Not pwsh or timeout
-      }
-      if (this._shell === "unknown") {
-        this._shell = "bash";
-      }
-
-      // If we auto-detected pwsh as the login shell, reconnect with
-      // -NoProfile -NonInteractive for clean output (no prompts, no echo).
-      // This makes the session identical to a pre-configured shell=pwsh target.
-      if (this._shell === "pwsh") {
-        this.killSsh();
-        this.configuredShell = "pwsh";
-        await this.spawnSsh();
-      }
-    }
+    // Shell is always configured — set it directly.
+    this._shell = this.configuredShell;
 
     // pwsh session setup — suppress ANSI, progress bars
     if (this._shell === "pwsh") {
@@ -344,6 +315,39 @@ export class SshTransport extends EventEmitter implements Transport {
       } catch {
         // Non-fatal
       }
+    }
+
+    // Validate the session produces clean output (no echo, no prompts).
+    await this.validateCleanOutput();
+  }
+
+  private async validateCleanOutput(): Promise<void> {
+    const token = `PITRAMP_VALIDATE_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    let cmd: string;
+    if (this._shell === "pwsh") {
+      cmd = `Write-Output "${token}"`;
+    } else {
+      cmd = `echo '${token}'`;
+    }
+    try {
+      const result = await this.execRaw(cmd, 5000);
+      const output = result.stdout.trim();
+      if (output !== token) {
+        throw new Error(
+          `Shell (${this._shell}) produces noisy output — prompts or echoed ` +
+          `input detected. This corrupts file I/O operations.\n` +
+          `Expected: "${token}"\n` +
+          `Got: "${output.slice(0, 200)}${output.length > 200 ? "..." : ""}"`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("noisy output")) throw err;
+      throw Object.assign(
+        new Error(
+          `Failed to validate shell output: ${err instanceof Error ? err.message : err}.`,
+        ),
+        { cause: err },
+      );
     }
   }
 
@@ -449,45 +453,6 @@ export class SshTransport extends EventEmitter implements Transport {
   }
 
   // --- Internal: sentinel-wrapped exec ---
-
-  /**
-   * Execute with dual-format sentinel — for shell detection when we
-   * don't yet know if the login shell is bash or pwsh.
-   */
-  private execRawDual(command: string, timeoutMs: number): Promise<ExecResult> {
-    return new Promise((resolve, reject) => {
-      if (!this.ssh || !this.ssh.stdin?.writable) {
-        reject(new Error("SSH process not available"));
-        return;
-      }
-
-      const sentinelId = randomUUID().replace(/-/g, "");
-      const sentinel = `__PITRAMP_${sentinelId}__`;
-
-      this.sentinelRegex = new RegExp(`^${sentinel}_(\\d+)$`);
-      this.outputChunks = [];
-      this.currentResolve = resolve;
-      this.currentReject = reject;
-
-      this.currentTimeout = setTimeout(() => {
-        this.sentinelRegex = null;
-        this.currentResolve = null;
-        this.currentReject = null;
-        reject(Object.assign(
-          new Error(`Detection timed out after ${timeoutMs}ms`),
-          { kind: "timeout", after_ms: timeoutMs },
-        ));
-        try { this.ssh?.stdin?.write("\x03\n"); } catch { /* ignore */ }
-      }, timeoutMs);
-
-      // Send command + both sentinel formats
-      // pwsh: $LASTEXITCODE is $null until an external program runs.
-      // Use `-as [int]` to coerce $null → 0 so the sentinel always has digits.
-      const bashSentinel = `printf '%s_%d\\n' '${sentinel}' $? 2>/dev/null`;
-      const pwshSentinel = `Write-Output "${sentinel}_$(${ESC_LASTEXITCODE})" 2>$null`;
-      this.ssh.stdin!.write(`${command}\n${bashSentinel}\n${pwshSentinel}\n`);
-    });
-  }
 
   private execRaw(command: string, timeoutMs?: number): Promise<ExecResult> {
     const timeout = timeoutMs ?? this.defaultTimeout;
