@@ -179,6 +179,35 @@ jobs:
             } catch { Start-Sleep 2 }
           }
 
+      - name: Diagnose default SSH shell
+        shell: bash
+        run: |
+          # Copy the test key out of the container
+          docker cp pi-tramp-win-test:C:/test_key ./test_key
+          chmod 600 ./test_key
+
+          echo "=== Raw SSH session (no remote command) ==="
+          echo "Sending polyglot + diagnostics through stdin..."
+          {
+            # Source: https://stackoverflow.com/a/61469226 (CC BY-SA 4.0)
+            # Returns: CMD | Core | Desktop
+            echo '(dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition'
+            echo 'echo BASH_VERSION=$BASH_VERSION'
+            echo 'echo SHELL=$SHELL'
+            echo 'echo %COMSPEC%'
+            echo 'exit'
+          } | ssh -T -i ./test_key -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=no testuser@localhost 2>&1 || true
+
+          echo ""
+          echo "=== SSH with explicit pwsh remote command ==="
+          ssh -T -i ./test_key -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=no testuser@localhost pwsh -NoProfile -NonInteractive -Command '$PSVersionTable; echo "PSEdition=$($PSVersionTable.PSEdition)"' 2>&1 || true
+
+          echo ""
+          echo "=== SSH with explicit bash remote command ==="
+          ssh -T -i ./test_key -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=no testuser@localhost bash -c 'echo "BASH=$BASH_VERSION SHELL=$SHELL"' 2>&1 || true
+
+          rm -f ./test_key
+
       - name: Run integration tests
         env:
           PI_TRAMP_TARGET_OS: windows
