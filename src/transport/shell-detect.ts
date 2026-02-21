@@ -8,6 +8,7 @@ import type { ShellType, PlatformType } from "../types.js";
 
 /** Strip ANSI escape sequences from shell output. */
 function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b[[(][^\x1b]*?[a-zA-Z]|\x1b\][^\x07]*\x07/g, "");
 }
 
