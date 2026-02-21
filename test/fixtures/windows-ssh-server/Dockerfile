@@ -39,10 +39,11 @@ RUN $v = '2.47.1'; $p = '2'; `
 RUN Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null; `
     Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null
 
-# Set default SSH shell to pwsh 7 (not Windows PowerShell 5.1)
-RUN New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' `
-      -Name DefaultShell -Value 'C:\pwsh\pwsh.exe' `
-      -PropertyType String -Force | Out-Null
+# NOTE: We do NOT set DefaultShell here. The system default (cmd.exe) is used
+# as the SSH command wrapper. cmd.exe passes stdin through cleanly to child
+# processes, while pwsh -c does not reliably forward stdin for streaming.
+# Our ssh-transport explicitly specifies the shell (bash/pwsh) as the SSH
+# remote command, so DefaultShell only affects the wrapping layer.
 
 # ---------------------------------------------------------------------------
 # Create test user with SSH key auth

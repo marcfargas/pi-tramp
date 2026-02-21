@@ -2,7 +2,14 @@
  * End-to-end integration tests.
  *
  * Tests the full stack: TargetManager → ConnectionPool → Transport → Operations.
- * Runs all 4 scenarios: Docker×bash, Docker×pwsh, SSH×bash, SSH×pwsh.
+ *
+ * Scenarios tested:
+ *   Docker × bash, Docker × pwsh        — shell forced via Docker exec
+ *   SSH × auto-detect (bash)             — no shell config, default is bash (Linux only)
+ *   SSH × auto-detect (pwsh)             — no shell config, default is pwsh
+ *   SSH × explicit bash                  — shell: "bash", default is bash (Linux only)
+ *   SSH × explicit pwsh                  — shell: "pwsh", default is pwsh
+ *   SSH × mismatch                       — shell: "X" but default is "Y" → error
  *
  * Platform-aware: set PI_TRAMP_TARGET_OS=windows for Windows containers.
  * Default: Linux containers.
@@ -32,23 +39,45 @@ const execFileAsync = promisify(execFile);
 const TEMP = process.env.TEMP || process.env.TMP || "/tmp";
 const KEY_PATH = join(TEMP, "pi-tramp-test-key");
 const P = getTestPlatform();
+const isWindows = P.os === "windows";
 
-// Shared state
-let tm: TargetManager;
-let pool: ConnectionPool;
+// ---------------------------------------------------------------------------
+// SSH user config per platform
+// ---------------------------------------------------------------------------
+// Linux container: testuser (bash default), testuser-pwsh (pwsh default)
+// Windows container: testuser (DefaultShell=pwsh, single user)
+const SSH_BASH_USER = "testuser";           // bash default shell (Linux only)
+const SSH_PWSH_USER = isWindows ? "testuser" : "testuser-pwsh";  // pwsh default shell
+const SSH_BASE = { port: 2222, identityFile: KEY_PATH, cwd: P.workspace };
 
-// The 4 scenarios: transport × shell
-const scenarios: Array<{
+// ---------------------------------------------------------------------------
+// Operational test scenarios — each gets the full read/write/edit/exec suite
+// ---------------------------------------------------------------------------
+interface Scenario {
   name: string;
   targetName: string;
   transport: "docker" | "ssh";
   shell: TestShell;
-}> = [
+}
+
+const scenarios: Scenario[] = [
+  // Docker: shell forced via docker exec — always works
   { name: "Docker × bash", targetName: "docker-bash", transport: "docker", shell: "bash" },
   { name: "Docker × pwsh", targetName: "docker-pwsh", transport: "docker", shell: "pwsh" },
-  { name: "SSH × bash", targetName: "ssh-bash", transport: "ssh", shell: "bash" },
-  { name: "SSH × pwsh", targetName: "ssh-pwsh", transport: "ssh", shell: "pwsh" },
+  // SSH auto-detect: no shell configured, default shell is bash (clean, non-interactive)
+  ...(isWindows ? [] : [
+    { name: "SSH × auto-detect (bash)", targetName: "ssh-auto-bash", transport: "ssh" as const, shell: "bash" as TestShell },
+  ]),
+  // SSH explicit: user configures shell, forced as SSH remote command
+  ...(isWindows ? [] : [
+    { name: "SSH × explicit bash", targetName: "ssh-explicit-bash", transport: "ssh" as const, shell: "bash" as TestShell },
+  ]),
+  { name: "SSH × explicit pwsh", targetName: "ssh-explicit-pwsh", transport: "ssh" as const, shell: "pwsh" as TestShell },
 ];
+
+// Shared state
+let tm: TargetManager;
+let pool: ConnectionPool;
 
 describe("End-to-End", () => {
   beforeAll(async () => {
@@ -65,23 +94,34 @@ describe("End-to-End", () => {
     await fixKeyPermissions(KEY_PATH);
     await new Promise((r) => setTimeout(r, P.startupDelayMs));
 
-    // Create targets for all 4 scenarios
     tm = new TargetManager();
 
+    // Docker targets — shell forced via docker exec
     tm.createTarget("docker-bash", {
       type: "docker", container: P.dockerContainer, cwd: P.workspace, shell: "bash",
     } as TargetConfig);
     tm.createTarget("docker-pwsh", {
       type: "docker", container: P.dockerContainer, cwd: P.workspace, shell: "pwsh",
     } as TargetConfig);
-    tm.createTarget("ssh-bash", {
-      type: "ssh", host: `${P.sshUser}@${P.sshHost}`, port: 2222,
-      identityFile: KEY_PATH, cwd: P.workspace, shell: "bash",
+
+    // SSH auto-detect — no shell configured, server default is bash (clean)
+    if (!isWindows) {
+      tm.createTarget("ssh-auto-bash", {
+        type: "ssh", host: `${SSH_BASH_USER}@${P.sshHost}`, ...SSH_BASE,
+      } as TargetConfig);
+    }
+
+    // SSH explicit — user configures shell, forced as SSH remote command
+    if (!isWindows) {
+      tm.createTarget("ssh-explicit-bash", {
+        type: "ssh", host: `${SSH_BASH_USER}@${P.sshHost}`, ...SSH_BASE, shell: "bash",
+      } as TargetConfig);
+    }
+    tm.createTarget("ssh-explicit-pwsh", {
+      type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`, ...SSH_BASE, shell: "pwsh",
     } as TargetConfig);
-    tm.createTarget("ssh-pwsh", {
-      type: "ssh", host: `${P.sshUser}@${P.sshHost}`, port: 2222,
-      identityFile: KEY_PATH, cwd: P.workspace, shell: "pwsh",
-    } as TargetConfig);
+
+    // SSH mismatch targets — created per-test, not here
 
     pool = new ConnectionPool(tm);
     initTrampExec(pool, tm);
@@ -93,7 +133,7 @@ describe("End-to-End", () => {
   });
 
   // =========================================================================
-  // Run the same tests for each transport × shell scenario
+  // Run the full operations suite for each scenario
   // =========================================================================
   for (const s of scenarios) {
     describe(s.name, () => {
@@ -218,8 +258,8 @@ describe("End-to-End", () => {
             onData: (d) => chunks.push(d),
           });
           const output = Buffer.concat(chunks).toString("utf8").trim();
-          // Normalize for comparison: bash on Windows returns MSYS paths (/c/workspace)
-          // pwsh returns Windows paths (C:\workspace). Normalize both to lowercase forward-slash.
+          // Normalize: bash on Windows returns MSYS paths (/c/workspace),
+          // pwsh returns Windows paths (C:\workspace).
           const normalize = (p: string) =>
             p.replace(/\\/g, "/").replace(/^\/([a-zA-Z])\//, (_, d: string) => `${d.toUpperCase()}:/`).toLowerCase();
           expect(normalize(output)).toBe(normalize(P.workspace));
@@ -237,22 +277,67 @@ describe("End-to-End", () => {
   }
 
   // =========================================================================
-  // Cross-scenario tests (not per-scenario)
+  // Shell error tests
   // =========================================================================
+  describe("SSH shell errors", () => {
+    // Noisy default shell: pwsh login shell echoes input + shows prompts.
+    // Auto-detect without explicit shell config should error with helpful message.
+    if (!isWindows) {
+      it("errors when default shell is noisy (pwsh login shell, no shell configured)", async () => {
+        const noisyTm = new TargetManager();
+        noisyTm.createTarget("noisy-pwsh", {
+          type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`, ...SSH_BASE,
+          // No shell configured — connects to pwsh login shell directly
+        } as TargetConfig);
+        const noisyPool = new ConnectionPool(noisyTm);
 
+        await expect(noisyPool.getConnection("noisy-pwsh"))
+          .rejects.toThrow(/noisy output|shell/i);
+
+        await noisyPool.closeAll();
+      });
+    }
+
+    // Explicit shell works regardless of user's default — the configured
+    // shell is forced as SSH remote command. If the shell binary exists
+    // on the server, it starts correctly (e.g., pwsh on a bash-default user).
+    if (!isWindows) {
+      it("explicit pwsh works even when user default is bash", async () => {
+        // testuser's default is bash, but shell: "pwsh" forces SSH to run
+        // pwsh -NonInteractive -Command -, which succeeds because pwsh is installed.
+        const crossTm = new TargetManager();
+        crossTm.createTarget("cross-pwsh", {
+          type: "ssh", host: `${SSH_BASH_USER}@${P.sshHost}`, ...SSH_BASE,
+          shell: "pwsh",
+        } as TargetConfig);
+        const crossPool = new ConnectionPool(crossTm);
+
+        const transport = await crossPool.getConnection("cross-pwsh");
+        expect(transport.shell).toBe("pwsh");
+        const result = await transport.exec("Write-Output 'cross-test'");
+        expect(result.stdout.trim()).toBe("cross-test");
+
+        await crossPool.closeAll();
+      });
+    }
+  });
+
+  // =========================================================================
+  // Cross-scenario tests
+  // =========================================================================
   describe("target switching", () => {
     it("emits events on switch", () => {
       const events: Array<{ from?: string; to: string }> = [];
       tm.on("target_switched", (e: { from?: string; to: string }) => events.push(e));
 
       tm.switchTarget("docker-bash");
-      tm.switchTarget("ssh-pwsh");
+      tm.switchTarget("ssh-explicit-pwsh");
       tm.switchTarget("local");
 
       expect(events).toHaveLength(3);
       expect(events[0].to).toBe("docker-bash");
       expect(events[1].from).toBe("docker-bash");
-      expect(events[1].to).toBe("ssh-pwsh");
+      expect(events[1].to).toBe("ssh-explicit-pwsh");
       expect(events[2].to).toBe("local");
 
       tm.removeAllListeners("target_switched");
@@ -268,8 +353,12 @@ describe("End-to-End", () => {
     });
 
     it("executes on a specific target", async () => {
+      const sshTarget = isWindows ? "ssh-auto-pwsh" : "ssh-auto-bash";
       tm.switchTarget("local");
-      const result = await trampExec("echo specific", { target: "ssh-bash" });
+      const result = await trampExec(
+        isWindows ? "Write-Output 'specific'" : "echo specific",
+        { target: sshTarget },
+      );
       expect(result.stdout.trim()).toBe("specific");
     });
 
@@ -319,12 +408,14 @@ describe("End-to-End", () => {
       const binary = Buffer.alloc(256);
       for (let i = 0; i < 256; i++) binary[i] = i;
 
-      const transport = await pool.getConnection("ssh-bash");
+      const sshTarget = isWindows ? "ssh-auto-pwsh" : "ssh-auto-bash";
+      const shell: TestShell = isWindows ? "pwsh" : "bash";
+      const transport = await pool.getConnection(sshTarget);
       const fpath = P.join(P.workspace, "e2e-ssh-binary.bin");
       await transport.writeFile(fpath, binary);
       const read = await transport.readFile(fpath);
       expect(read.equals(binary)).toBe(true);
-      await transport.exec(P.rmFile(fpath, "bash"));
+      await transport.exec(P.rmFile(fpath, shell));
     });
   });
 });

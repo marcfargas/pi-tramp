@@ -153,14 +153,16 @@ export class SshTransport extends EventEmitter implements Transport {
       // Host
       args.push(this.host);
 
-      // If shell is explicitly configured, force that shell for clean output.
-      // Otherwise, connect to the login shell and auto-detect.
+      // When shell is explicitly configured, force it as the SSH remote command.
+      // This is the user's declared intent — they take responsibility for it.
+      // When no shell is configured, connect to the server's default shell
+      // and auto-detect. If the default shell isn't usable, we error out.
       if (this.configuredShell === "pwsh") {
         args.push("pwsh", "-NoProfile", "-NonInteractive", "-Command", "-");
       } else if (this.configuredShell === "bash" || this.configuredShell === "sh") {
-        args.push("bash", "--norc", "--noprofile");
+        args.push("bash", "--login");
       }
-      // No configuredShell → use login shell, detect on connect
+      // No configuredShell → connect to default shell, auto-detect
 
       this.ssh = spawn(SSH_BINARY, args, {
         stdio: ["pipe", "pipe", "pipe"],
@@ -302,34 +304,30 @@ export class SshTransport extends EventEmitter implements Transport {
   // --- Shell detection + setup ---
 
   private async detectShellAndSetup(): Promise<void> {
-    if (this.configuredShell && this.configuredShell !== "unknown") {
-      this._shell = this.configuredShell;
-    } else {
-      // Auto-detect: use a unique marker for robustness against shell noise
-      // (prompts, echoed input, banners — common on Windows pwsh login shells).
-      const marker = `PITRAMP_PWSH_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-      try {
-        const result = await this.execRawDual(
-          `Write-Output "${marker}"`,
-          5000,
-        );
-        if (result.stdout.includes(marker)) {
-          this._shell = "pwsh";
-        }
-      } catch {
-        // Not pwsh or timeout
+    // Detect the shell via marker probe.
+    const marker = `PITRAMP_PWSH_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    try {
+      const result = await this.execRawDual(
+        `Write-Output "${marker}"`,
+        5000,
+      );
+      if (result.stdout.includes(marker)) {
+        this._shell = "pwsh";
       }
-      if (this._shell === "unknown") {
-        this._shell = "bash";
-      }
+    } catch {
+      // Not pwsh or timeout
+    }
+    if (this._shell === "unknown") {
+      this._shell = "bash";
+    }
 
-      // If we auto-detected pwsh as the login shell, reconnect with
-      // -NoProfile -NonInteractive for clean output (no prompts, no echo).
-      // This makes the session identical to a pre-configured shell=pwsh target.
-      if (this._shell === "pwsh") {
-        this.killSsh();
-        this.configuredShell = "pwsh";
-        await this.spawnSsh();
+    // Validate against configured shell (if any)
+    if (this.configuredShell && this.configuredShell !== "unknown") {
+      if (this.configuredShell !== this._shell) {
+        throw new Error(
+          `Shell mismatch: configured '${this.configuredShell}' but detected '${this._shell}'. ` +
+          `Check the target's shell setting or remove it to use auto-detection.`,
+        );
       }
     }
 
@@ -344,6 +342,44 @@ export class SshTransport extends EventEmitter implements Transport {
       } catch {
         // Non-fatal
       }
+    }
+
+    // Validate the session produces clean output (no echo, no prompts).
+    // Interactive login shells (especially pwsh) echo input and show prompts,
+    // which corrupts the sentinel protocol's file I/O operations.
+    await this.validateCleanOutput();
+  }
+
+  private async validateCleanOutput(): Promise<void> {
+    const token = `PITRAMP_VALIDATE_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    let cmd: string;
+    if (this._shell === "pwsh") {
+      cmd = `Write-Output "${token}"`;
+    } else {
+      cmd = `echo '${token}'`;
+    }
+    try {
+      const result = await this.execRaw(cmd, 5000);
+      const output = result.stdout.trim();
+      if (output !== token) {
+        throw new Error(
+          `Default shell (${this._shell}) produces noisy output — prompts or echoed ` +
+          `input detected. This corrupts file I/O operations.\n` +
+          `Expected: "${token}"\n` +
+          `Got: "${output.slice(0, 200)}${output.length > 200 ? "..." : ""}"\n\n` +
+          `Fix: set "shell" in your target config to connect with a clean session:\n` +
+          `  { "shell": "${this._shell}" }`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("noisy output")) throw err;
+      throw Object.assign(
+        new Error(
+          `Failed to validate shell output: ${err instanceof Error ? err.message : err}. ` +
+          `The default shell may not be compatible. Try setting "shell" in target config.`,
+        ),
+        { cause: err },
+      );
     }
   }
 
