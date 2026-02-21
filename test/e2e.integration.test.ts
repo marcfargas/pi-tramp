@@ -5,10 +5,8 @@
  *
  * Scenarios tested:
  *   Docker × bash, Docker × pwsh        — shell forced via Docker exec
- *   SSH × auto-detect (bash)             — no shell config, default is bash (Linux only)
- *   SSH × auto-detect (pwsh)             — no shell config, default is pwsh
- *   SSH × explicit bash                  — shell: "bash", default is bash (Linux only)
- *   SSH × explicit pwsh                  — shell: "pwsh", default is pwsh
+ *   SSH × explicit bash                  — shell: "bash" (Linux only)
+ *   SSH × explicit pwsh                  — shell: "pwsh"
  *
  * Platform-aware: set PI_TRAMP_TARGET_OS=windows for Windows containers.
  * Default: Linux containers.
@@ -63,15 +61,7 @@ const scenarios: Scenario[] = [
   // Docker: shell forced via docker exec — always works
   { name: "Docker × bash", targetName: "docker-bash", transport: "docker", shell: "bash" },
   { name: "Docker × pwsh", targetName: "docker-pwsh", transport: "docker", shell: "pwsh" },
-  // SSH auto-detect: no shell configured, default shell is bash (clean, non-interactive)
-  ...(isWindows ? [] : [
-    { name: "SSH × auto-detect (bash)", targetName: "ssh-auto-bash", transport: "ssh" as const, shell: "bash" as TestShell },
-  ]),
-  // SSH auto-detect: no shell configured, default shell is pwsh (Windows container)
-  ...(isWindows ? [
-    { name: "SSH × auto-detect (pwsh)", targetName: "ssh-auto-pwsh", transport: "ssh" as const, shell: "pwsh" as TestShell },
-  ] : []),
-  // SSH explicit: user configures shell, forced as SSH remote command
+  // SSH explicit: shell required, forced as SSH remote command
   ...(isWindows ? [] : [
     { name: "SSH × explicit bash", targetName: "ssh-explicit-bash", transport: "ssh" as const, shell: "bash" as TestShell },
   ]),
@@ -107,28 +97,7 @@ describe("End-to-End", () => {
       type: "docker", container: P.dockerContainer, cwd: P.workspace, shell: "pwsh",
     } as TargetConfig);
 
-    // SSH auto-detect — no shell configured, server default is bash (clean, Linux)
-    if (!isWindows) {
-      tm.createTarget("ssh-auto-bash", {
-        type: "ssh", host: `${SSH_BASH_USER}@${P.sshHost}`, ...SSH_BASE,
-      } as TargetConfig);
-    }
-
-    // SSH auto-detect — Windows: two containers with different DefaultShell settings.
-    // ssh-auto-cmd: cmd.exe default (port sshCmdPort) — expected to reject with clear error.
-    // ssh-auto-pwsh: pwsh default (port sshPwshPort) — expected to auto-detect pwsh.
-    if (isWindows) {
-      tm.createTarget("ssh-auto-cmd", {
-        type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`,
-        port: P.sshCmdPort, identityFile: KEY_PATH, cwd: P.workspace,
-      } as TargetConfig);
-      tm.createTarget("ssh-auto-pwsh", {
-        type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`,
-        port: P.sshPwshPort, identityFile: KEY_PATH, cwd: P.workspace,
-      } as TargetConfig);
-    }
-
-    // SSH explicit — user configures shell, forced as SSH remote command
+    // SSH explicit — shell required, forced as SSH remote command
     if (!isWindows) {
       tm.createTarget("ssh-explicit-bash", {
         type: "ssh", host: `${SSH_BASH_USER}@${P.sshHost}`, ...SSH_BASE, shell: "bash",
@@ -297,35 +266,6 @@ describe("End-to-End", () => {
   // Shell error tests
   // =========================================================================
   describe("SSH shell errors", () => {
-    // cmd.exe default: Windows container on sshCmdPort.
-    // Auto-detect should detect cmd.exe via polyglot and throw a clear error.
-    it.runIf(isWindows)(
-      "rejects cmd.exe default shell with clear error message",
-      async () => {
-        await expect(pool.getConnection("ssh-auto-cmd"))
-          .rejects.toThrow(/cmd\.exe.*not supported/i);
-      },
-    );
-
-    // Noisy default shell: pwsh login shell echoes input + shows prompts.
-    // Auto-detect without explicit shell config should error with helpful message.
-    // Linux-only: Linux container has a noisy-pwsh-default user for this test.
-    it.skipIf(isWindows)(
-      "errors when default shell is noisy (pwsh login shell, no shell configured)",
-      async () => {
-        const noisyTm = new TargetManager();
-        noisyTm.createTarget("noisy-pwsh", {
-          type: "ssh", host: `${SSH_PWSH_USER}@${P.sshHost}`, ...SSH_BASE,
-          // No shell configured — connects to pwsh login shell directly
-        } as TargetConfig);
-        const noisyPool = new ConnectionPool(noisyTm);
-
-        await expect(noisyPool.getConnection("noisy-pwsh"))
-          .rejects.toThrow(/noisy output|shell/i);
-
-        await noisyPool.closeAll();
-      });
-
     // Explicit shell works regardless of user's default — the configured
     // shell is forced as SSH remote command. If the shell binary exists
     // on the server, it starts correctly (e.g., pwsh on a bash-default user).
@@ -382,7 +322,7 @@ describe("End-to-End", () => {
     });
 
     it("executes on a specific target", async () => {
-      const sshTarget = isWindows ? "ssh-auto-pwsh" : "ssh-auto-bash";
+      const sshTarget = isWindows ? "ssh-explicit-pwsh" : "ssh-explicit-bash";
       tm.switchTarget("local");
       const result = await trampExec(
         isWindows ? "Write-Output 'specific'" : "echo specific",
@@ -437,7 +377,7 @@ describe("End-to-End", () => {
       const binary = Buffer.alloc(256);
       for (let i = 0; i < 256; i++) binary[i] = i;
 
-      const sshTarget = isWindows ? "ssh-auto-pwsh" : "ssh-auto-bash";
+      const sshTarget = isWindows ? "ssh-explicit-pwsh" : "ssh-explicit-bash";
       const shell: TestShell = isWindows ? "pwsh" : "bash";
       const transport = await pool.getConnection(sshTarget);
       const fpath = P.join(P.workspace, "e2e-ssh-binary.bin");

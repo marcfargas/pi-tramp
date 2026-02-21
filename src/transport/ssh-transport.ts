@@ -24,7 +24,7 @@ import type {
 import { BashDriver } from "../shell/bash-driver.js";
 import { PwshDriver } from "../shell/pwsh-driver.js";
 import { CommandQueue } from "./command-queue.js";
-import { parsePlatform, parseArch, parseShellPolyglot } from "./shell-detect.js";
+import { parsePlatform, parseArch } from "./shell-detect.js";
 
 // On Windows, use the native SSH binary for access to Windows SSH agent.
 // On Linux/macOS, use system ssh from PATH.
@@ -32,11 +32,6 @@ const SSH_BINARY = process.platform === "win32"
   ? "C:\\Windows\\System32\\OpenSSH\\ssh.exe"
   : "ssh";
 
-// pwsh expression for $LASTEXITCODE that handles $null → 0.
-// $LASTEXITCODE is $null until an external program runs, so raw
-// interpolation like "${sentinel}_$LASTEXITCODE" omits the digits
-// and breaks the sentinel regex (\d+).
-const ESC_LASTEXITCODE = "$LASTEXITCODE -as [int]";
 
 export class SshTransport extends EventEmitter implements Transport {
   readonly type = "ssh" as const;
@@ -64,7 +59,7 @@ export class SshTransport extends EventEmitter implements Transport {
   private readonly host: string;
   private readonly port: number;
   private readonly identityFile: string | undefined;
-  private configuredShell: ShellType | undefined; // mutable: set after auto-detection
+  private readonly configuredShell: ShellType;
   private readonly defaultTimeout: number;
 
   constructor(config: SshTargetConfig) {
@@ -72,7 +67,7 @@ export class SshTransport extends EventEmitter implements Transport {
     this.host = config.host;
     this.port = config.port ?? 22;
     this.identityFile = config.identityFile;
-    this.configuredShell = config.shell as ShellType | undefined;
+    this.configuredShell = config.shell as ShellType;
     this.defaultTimeout = config.timeout ?? 60000;
   }
 
@@ -153,16 +148,13 @@ export class SshTransport extends EventEmitter implements Transport {
       // Host
       args.push(this.host);
 
-      // When shell is explicitly configured, force it as the SSH remote command.
-      // This is the user's declared intent — they take responsibility for it.
-      // When no shell is configured, connect to the server's default shell
-      // and auto-detect. If the default shell isn't usable, we error out.
+      // Shell is always configured — force it as the SSH remote command.
       if (this.configuredShell === "pwsh") {
         args.push("pwsh", "-NoProfile", "-NonInteractive", "-Command", "-");
-      } else if (this.configuredShell === "bash" || this.configuredShell === "sh") {
-        args.push("bash", "--login");
+      } else {
+        // bash or sh
+        args.push(this.configuredShell, "--login");
       }
-      // No configuredShell → connect to default shell, auto-detect
 
       this.ssh = spawn(SSH_BINARY, args, {
         stdio: ["pipe", "pipe", "pipe"],
@@ -211,17 +203,12 @@ export class SshTransport extends EventEmitter implements Transport {
       };
       this.currentTimeout = timeout;
 
-      // Send ready probe — triple format for unknown login shells.
-      // One of these will succeed depending on what shell is running.
-      // bash/sh: printf works, Write-Output errors to stderr
-      // pwsh: Write-Output works, printf may or may not exist
-      // cmd.exe: neither printf nor Write-Output works, but echo is built-in
-      this.ssh.stdin!.write(`printf '%s_%d\\n' '${probeSentinel}' 0 2>/dev/null\n`);
-      this.ssh.stdin!.write(`Write-Output "${probeSentinel}_0" 2>$null\n`);
-      // Universal fallback — echo is built-in in bash, pwsh, AND cmd.exe.
-      // In bash/pwsh, printf/Write-Output resolves first; currentResolve is null
-      // by the time echo fires, so it is harmlessly ignored.
-      this.ssh.stdin!.write(`echo ${probeSentinel}_0\n`);
+      // Shell-specific probe — we always know the shell upfront.
+      if (this.configuredShell === "pwsh") {
+        this.ssh.stdin!.write(`Write-Output "${probeSentinel}_0"\n`);
+      } else {
+        this.ssh.stdin!.write(`printf '%s_%d\\n' '${probeSentinel}' 0\n`);
+      }
     });
   }
 
@@ -314,57 +301,8 @@ export class SshTransport extends EventEmitter implements Transport {
   // --- Shell detection + setup ---
 
   private async detectShellAndSetup(): Promise<void> {
-    // Phase 1: Use polyglot to detect cmd.exe vs PowerShell Core/Desktop vs bash.
-    // Source: https://stackoverflow.com/a/61469226 (CC BY-SA 4.0)
-    // Returns: "CMD" (cmd.exe), "Core" (pwsh 7), "Desktop" (Windows PowerShell 5.1)
-    // In bash, this produces a syntax error — no recognizable output → "unknown".
-    const polyglotResult = await this.execRawDual(
-      "(dir 2>&1 *`|echo CMD);&<# rem #>echo ($PSVersionTable).PSEdition",
-      5000,
-    );
-    const shellType = parseShellPolyglot(polyglotResult.stdout);
-
-    if (shellType === "cmd") {
-      throw new Error(
-        `Default SSH shell is cmd.exe, which is not supported.\n` +
-        `Fix: set "shell" in your target config:\n` +
-        `  { "shell": "pwsh" }   — for PowerShell 7\n` +
-        `  { "shell": "bash" }   — for Git Bash / WSL`,
-      );
-    }
-
-    if (shellType === "pwsh") {
-      this._shell = "pwsh";
-    }
-
-    // Phase 2: If not detected as PowerShell, try bash by checking $BASH_VERSION.
-    if (this._shell === "unknown") {
-      try {
-        const bashResult = await this.execRawDual("echo $BASH_VERSION", 5000);
-        const version = bashResult.stdout.trim();
-        if (version && !version.includes("$BASH_VERSION")) {
-          // $BASH_VERSION expanded → we're in bash
-          this._shell = "bash";
-        }
-      } catch {
-        // Not bash
-      }
-    }
-
-    // Phase 3: If still unknown, default to bash (existing behaviour).
-    if (this._shell === "unknown") {
-      this._shell = "bash";
-    }
-
-    // Validate against configured shell (if any)
-    if (this.configuredShell && this.configuredShell !== "unknown") {
-      if (this.configuredShell !== this._shell) {
-        throw new Error(
-          `Shell mismatch: configured '${this.configuredShell}' but detected '${this._shell}'. ` +
-          `Check the target's shell setting or remove it to use auto-detection.`,
-        );
-      }
-    }
+    // Shell is always configured — set it directly.
+    this._shell = this.configuredShell;
 
     // pwsh session setup — suppress ANSI, progress bars
     if (this._shell === "pwsh") {
@@ -380,8 +318,6 @@ export class SshTransport extends EventEmitter implements Transport {
     }
 
     // Validate the session produces clean output (no echo, no prompts).
-    // Interactive login shells (especially pwsh) echo input and show prompts,
-    // which corrupts the sentinel protocol's file I/O operations.
     await this.validateCleanOutput();
   }
 
@@ -398,20 +334,17 @@ export class SshTransport extends EventEmitter implements Transport {
       const output = result.stdout.trim();
       if (output !== token) {
         throw new Error(
-          `Default shell (${this._shell}) produces noisy output — prompts or echoed ` +
+          `Shell (${this._shell}) produces noisy output — prompts or echoed ` +
           `input detected. This corrupts file I/O operations.\n` +
           `Expected: "${token}"\n` +
-          `Got: "${output.slice(0, 200)}${output.length > 200 ? "..." : ""}"\n\n` +
-          `Fix: set "shell" in your target config to connect with a clean session:\n` +
-          `  { "shell": "${this._shell}" }`,
+          `Got: "${output.slice(0, 200)}${output.length > 200 ? "..." : ""}"`,
         );
       }
     } catch (err) {
       if (err instanceof Error && err.message.includes("noisy output")) throw err;
       throw Object.assign(
         new Error(
-          `Failed to validate shell output: ${err instanceof Error ? err.message : err}. ` +
-          `The default shell may not be compatible. Try setting "shell" in target config.`,
+          `Failed to validate shell output: ${err instanceof Error ? err.message : err}.`,
         ),
         { cause: err },
       );
@@ -520,47 +453,6 @@ export class SshTransport extends EventEmitter implements Transport {
   }
 
   // --- Internal: sentinel-wrapped exec ---
-
-  /**
-   * Execute with dual-format sentinel — for shell detection when we
-   * don't yet know if the login shell is bash or pwsh.
-   */
-  private execRawDual(command: string, timeoutMs: number): Promise<ExecResult> {
-    return new Promise((resolve, reject) => {
-      if (!this.ssh || !this.ssh.stdin?.writable) {
-        reject(new Error("SSH process not available"));
-        return;
-      }
-
-      const sentinelId = randomUUID().replace(/-/g, "");
-      const sentinel = `__PITRAMP_${sentinelId}__`;
-
-      this.sentinelRegex = new RegExp(`^${sentinel}_(\\d+)$`);
-      this.outputChunks = [];
-      this.currentResolve = resolve;
-      this.currentReject = reject;
-
-      this.currentTimeout = setTimeout(() => {
-        this.sentinelRegex = null;
-        this.currentResolve = null;
-        this.currentReject = null;
-        reject(Object.assign(
-          new Error(`Detection timed out after ${timeoutMs}ms`),
-          { kind: "timeout", after_ms: timeoutMs },
-        ));
-        try { this.ssh?.stdin?.write("\x03\n"); } catch { /* ignore */ }
-      }, timeoutMs);
-
-      // Send command + triple sentinel formats
-      // pwsh: $LASTEXITCODE is $null until an external program runs.
-      // Use `-as [int]` to coerce $null → 0 so the sentinel always has digits.
-      // cmd.exe: neither printf nor Write-Output works; echo fires as fallback.
-      const bashSentinel = `printf '%s_%d\\n' '${sentinel}' $? 2>/dev/null`;
-      const pwshSentinel = `Write-Output "${sentinel}_$(${ESC_LASTEXITCODE})" 2>$null`;
-      const echoSentinel = `echo ${sentinel}_0`;  // universal fallback for cmd.exe
-      this.ssh.stdin!.write(`${command}\n${bashSentinel}\n${pwshSentinel}\n${echoSentinel}\n`);
-    });
-  }
 
   private execRaw(command: string, timeoutMs?: number): Promise<ExecResult> {
     const timeout = timeoutMs ?? this.defaultTimeout;

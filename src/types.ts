@@ -137,7 +137,7 @@ const SshTargetConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).optional().default(22),
   identityFile: z.string().optional(),
   cwd: z.string().min(1).optional(), // Optional — auto-detected from remote homedir on connect
-  shell: ShellTypeSchema.optional(),
+  shell: ShellTypeSchema,
   requireEntryConfirmation: z.boolean().optional().default(false),
   timeout: z.number().int().min(1000, "Timeout must be at least 1000ms").optional().default(60000),
 });

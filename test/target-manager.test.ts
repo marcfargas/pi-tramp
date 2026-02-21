@@ -15,6 +15,7 @@ function sshConfig(overrides?: Partial<TargetConfig>): TargetConfig {
     type: "ssh",
     host: "user@host",
     cwd: "/home/user",
+    shell: "bash",
     ...overrides,
   } as TargetConfig;
 }
@@ -201,7 +202,7 @@ describe("TargetManager", () => {
         JSON.stringify({
           default: "dev",
           targets: {
-            dev: { type: "ssh", host: "user@host", cwd: "/home" },
+            dev: { type: "ssh", host: "user@host", cwd: "/home", shell: "bash" },
           },
         }),
       );
@@ -266,7 +267,7 @@ describe("TargetManager", () => {
         join(piDir, "targets.json"),
         JSON.stringify({
           targets: {
-            dev: { type: "ssh", host: "user@host", cwd: "/home" },
+            dev: { type: "ssh", host: "user@host", cwd: "/home", shell: "bash" },
           },
         }),
       );
