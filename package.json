@@ -54,7 +54,7 @@
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.2",
+    "@changesets/changelog-github": "^0.6.0",
     "@changesets/cli": "^2.29.8",
     "@eslint/js": "^10.0.1",
     "@mariozechner/pi-coding-agent": ">=0.50.0",
